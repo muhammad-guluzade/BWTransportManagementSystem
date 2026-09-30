@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Stuttgart Departures</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 1.4rem; }
+  #search-box { position: relative; }
+  input[type=text] { width: 100%; padding: 10px; font-size: 1rem; box-sizing: border-box; border: 1px solid #aaa; border-radius: 4px; }
+  #results { position: absolute; background: white; border: 1px solid #ccc; width: 100%; z-index: 10; max-height: 220px; overflow-y: auto; box-sizing: border-box; }
+  #results div { padding: 8px 10px; cursor: pointer; }
+  #results div:hover { background: #eef; }
+  .platform-block { margin-top: 10px; border: 1px solid #ddd; border-radius: 6px; overflow: hidden; }
+  .platform-title { font-weight: bold; background: #333; color: white; padding: 8px 12px; }
+  .mode-section { margin-top: 28px; }
+  .mode-section:first-of-type { margin-top: 20px; }
+  .mode-header { font-size: 1.05rem; font-weight: bold; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 3px solid #999; color: #333; }
+  .mode-header.mode-u-bahn { border-color: #005aa9; color: #005aa9; }
+  .mode-header.mode-s-bahn { border-color: #2e8b47; color: #2e8b47; }
+  .mode-header.mode-bus { border-color: #a1338f; color: #a1338f; }
+  .mode-header.mode-train { border-color: #c1121c; color: #c1121c; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 8px 12px; border-bottom: 1px solid #eee; }
+  tr:last-child td { border-bottom: none; }
+  .line-badge { display: inline-block; min-width: 30px; padding: 3px 6px; background: #005aa9; color: white; border-radius: 4px; font-weight: bold; text-align: center; font-size: 0.9rem; }
+  .minutes { color: #666; text-align: right; }
+  #status { color: #777; margin-top: 10px; font-size: 0.9rem; }
+</style>
+</head>
+<body>
+
+<h1>Stuttgart Departures</h1>
+
+<div id="search-box">
+  <input type="text" id="stop-input" placeholder="Search a stop, e.g. Pragfriedhof" autocomplete="off">
+  <div id="results"></div>
+</div>
+
+<div id="status"></div>
+<div id="board"></div>
+
+<script>
+const input = document.getElementById('stop-input');
+const resultsBox = document.getElementById('results');
+const board = document.getElementById('board');
+const status = document.getElementById('status');
+let debounceTimer;
+let refreshTimer;
+
+input.addEventListener('input', () => {
+  clearTimeout(debounceTimer);
+  const q = input.value.trim();
+  if (q.length < 2) { resultsBox.innerHTML = ''; return; }
+  debounceTimer = setTimeout(() => searchStops(q), 300);
+});
+
+// close the dropdown if you click elsewhere
+document.addEventListener('click', (e) => {
+  if (!document.getElementById('search-box').contains(e.target)) {
+    resultsBox.innerHTML = '';
+  }
+});
+
+async function searchStops(q) {
+  const res = await fetch(`/api/search_stops?q=${encodeURIComponent(q)}`);
+  const stops = await res.json();
+  resultsBox.innerHTML = '';
+  stops.forEach(s => {
+    const div = document.createElement('div');
+    div.textContent = s.city ? `${s.name} (${s.city})` : s.name;
+    div.onclick = () => selectStop(s);
+    resultsBox.appendChild(div);
+  });
+}
+
+function selectStop(stop) {
+  input.value = stop.name;
+  resultsBox.innerHTML = '';
+  status.textContent = `Loading departures for ${stop.name}...`;
+  loadDepartures(stop.id);
+  clearInterval(refreshTimer);
+
+  // How often the departures board gets updated
+  refreshTimer = setInterval(() => loadDepartures(stop.id), 30000);
+}
+
+async function loadDepartures(stopId) {
+  const res = await fetch(`/api/departures?stop_id=${encodeURIComponent(stopId)}`);
+  if (!res.ok) {
+    status.textContent = 'Could not load departures.';
+    return;
+  }
+  const data = await res.json();
+  renderBoard(data);
+  status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+}
+
+function modeSlug(name) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+}
+
+function renderBoard(data) {
+  board.innerHTML = '';
+  const modeNames = Object.keys(data.modes);
+  if (modeNames.length === 0) {
+    board.innerHTML = '<p>No departures found for this stop right now.</p>';
+    return;
+  }
+
+  // modes and platforms within them already arrive pre-sorted from the backend
+  modeNames.forEach(modeName => {
+    const modeData = data.modes[modeName];
+
+    const section = document.createElement('div');
+    section.className = 'mode-section';
+
+    const header = document.createElement('div');
+    header.className = `mode-header mode-${modeSlug(modeName)}`;
+    header.textContent = modeName;
+    section.appendChild(header);
+
+    Object.keys(modeData.platforms).forEach(platformName => {
+      const block = document.createElement('div');
+      block.className = 'platform-block';
+
+      if (!modeData.flat) {
+        const title = document.createElement('div');
+        title.className = 'platform-title';
+        title.textContent = platformName;
+        block.appendChild(title);
+      }
+
+      const table = document.createElement('table');
+      modeData.platforms[platformName].forEach(dep => {
+        const row = document.createElement('tr');
+        const minutesLabel = (dep.minutes !== null && dep.minutes !== undefined)
+          ? `${dep.minutes} min` : '';
+        row.innerHTML = `
+          <td><span class="line-badge">${dep.line}</span></td>
+          <td>${dep.direction}</td>
+          <td>${dep.time}</td>
+          <td class="minutes">${minutesLabel}</td>
+        `;
+        table.appendChild(row);
+      });
+      block.appendChild(table);
+      section.appendChild(block);
+    });
+
+    board.appendChild(section);
+  });
+}
+</script>
+
+</body>
+</html>
