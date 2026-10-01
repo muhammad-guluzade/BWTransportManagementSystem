@@ -100,6 +100,18 @@ class PlatformLabelTest(unittest.TestCase):
         for raw, expected in cases.items():
             self.assertEqual(parse.platform_label(platform(raw)), expected)
 
+    def test_platform_code_is_the_bare_value(self):
+        self.assertEqual(parse.platform_code(platform("Gleis 3")), "3")
+        self.assertEqual(parse.platform_code(platform("Bstg. A")), "A")
+        self.assertEqual(parse.platform_code(platform("4 Nord")), "4 Nord")
+        self.assertIsNone(parse.platform_code(platform()))
+        self.assertIsNone(parse.platform_code(platform("Flix")))
+
+    def test_slug(self):
+        self.assertEqual(parse.slug("U-Bahn / Tram"), "u_bahn_tram")
+        self.assertEqual(parse.slug("S-Bahn"), "s_bahn")
+        self.assertEqual(parse.slug("Long-distance train"), "long_distance_train")
+
     def test_falls_back_to_platform_number(self):
         self.assertEqual(parse.platform_label(platform(number="2")), "Platform 2")
 
@@ -160,7 +172,7 @@ class StopSearchTest(unittest.TestCase):
         "stateless": "6906508:$Z1",
         "quality": "965",
         "modes": "0,1,4,5",
-        "ref": {"id": "6906508", "gid": "de:08311:6508"},
+        "ref": {"id": "6906508", "gid": "de:08311:6508", "coords": "7.840954,47.997458"},
     }
 
     def test_single_match_is_not_dropped(self):
@@ -177,6 +189,13 @@ class StopSearchTest(unittest.TestCase):
         # the full name, so the city stays visible after picking a result
         self.assertEqual(stop["name"], "Freiburg im Breisgau, Hauptbahnhof")
         self.assertEqual((stop["quality"], stop["classes"]), (965, [0, 1, 4, 5]))
+        # EFA's search gives "lon,lat"
+        self.assertEqual((stop["lat"], stop["lon"]), (47.997458, 7.840954))
+
+    def test_stop_without_coordinates(self):
+        point = {**self.POINT, "ref": {"gid": "de:08311:6508", "coords": "garbage"}}
+        stop = parse.parse_stop(point)
+        self.assertEqual((stop["lat"], stop["lon"]), (None, None))
 
     def test_non_stops_are_skipped(self):
         self.assertIsNone(parse.parse_stop({**self.POINT, "anyType": "street"}))
@@ -194,9 +213,11 @@ class StationTest(unittest.TestCase):
             "id": "de:08111:6115",
             "name": "Stuttgart, Hauptbahnhof (oben)",
             "type": "stop",
+            "coord": [48.784729, 9.183172],
             "assignedStops": [
                 {"id": "de:08111:6115", "name": "Stuttgart Hauptbahnhof (oben)", "productClasses": [0, 1, 13, 16]},
-                {"id": "de:08111:6118", "name": "Stuttgart Hauptbahnhof (tief)", "productClasses": [1]},
+                {"id": "de:08111:6118", "name": "Stuttgart Hauptbahnhof (tief)", "productClasses": [1],
+                 "coord": [48.783385, 9.180225]},
                 {"id": "de:08111:6112", "name": "Hauptbf (Arnulf-Klett-Platz)", "productClasses": [0, 3, 5, 6, 11]},
             ],
         }],
@@ -207,9 +228,13 @@ class StationTest(unittest.TestCase):
         self.assertEqual(station["id"], "de:08111:6115")
         self.assertEqual(station["name"], "Stuttgart, Hauptbahnhof (oben)")
         self.assertEqual(station["classes"], [0, 1, 13, 16])
+        self.assertEqual((station["lat"], station["lon"]), (48.784729, 9.183172))
         self.assertEqual(station["nearby"], [
-            {"id": "de:08111:6118", "name": "Stuttgart Hauptbahnhof (tief)", "classes": [1]},
-            {"id": "de:08111:6112", "name": "Hauptbf (Arnulf-Klett-Platz)", "classes": [0, 3, 5, 6, 11]},
+            {"id": "de:08111:6118", "name": "Stuttgart Hauptbahnhof (tief)", "lat": 48.783385, "lon": 9.180225,
+             "classes": [1]},
+            # no coordinates from EFA -> None, not a crash
+            {"id": "de:08111:6112", "name": "Hauptbf (Arnulf-Klett-Platz)", "lat": None, "lon": None,
+             "classes": [0, 3, 5, 6, 11]},
         ])
 
     def test_unknown_stop(self):
@@ -260,7 +285,8 @@ class ParseDepartureTest(unittest.TestCase):
         self.assertEqual(dep["mode"], "U-Bahn / Tram")
         self.assertEqual(dep["platform"], "Platform 2")
         self.assertEqual(dep["line"], "U6")
-        self.assertEqual(dep["direction"], "Gerlingen")
+        self.assertEqual(dep["destination"], "Gerlingen")
+        self.assertEqual(dep["platform_code"], "2")
         self.assertEqual(dep["time"], "2026-10-01T08:03:00Z")
         self.assertEqual(dep["planned"], "2026-10-01T08:00:00Z")
         self.assertEqual((dep["minutes"], dep["delay"], dep["realtime"]), (5, 3, True))
@@ -281,8 +307,18 @@ class ParseDepartureTest(unittest.TestCase):
             ],
         }
         dep = parse.parse_departure(event)
-        self.assertEqual(dep["direction"], "Bismarckplatz")
+        self.assertEqual(dep["destination"], "Bismarckplatz")
         self.assertEqual(dep["via"], ["Seegarten"])
+
+    def test_delay_counts_full_minutes_only(self):
+        def delay(estimated):
+            event = {"departureTimePlanned": "2026-10-01T08:00:00Z", "departureTimeEstimated": estimated}
+            return parse.parse_departure(event)["delay"]
+        self.assertEqual(delay("2026-10-01T08:00:42Z"), 0)   # 42 s late: still "08:00"
+        self.assertEqual(delay("2026-10-01T08:01:30Z"), 1)
+        self.assertEqual(delay("2026-10-01T08:45:00Z"), 45)
+        self.assertEqual(delay("2026-10-01T07:59:30Z"), 0)   # 30 s early
+        self.assertEqual(delay("2026-10-01T07:58:00Z"), -2)
 
     def test_cancelled(self):
         event = {"isCancelled": True, "departureTimePlanned": "2026-10-01T08:00:00Z"}
@@ -302,7 +338,9 @@ class ParseDepartureTest(unittest.TestCase):
 
 class GroupingTest(unittest.TestCase):
     def dep(self, mode, platform_name, minutes, area="Hbf"):
-        return {"mode": mode, "platform": platform_name, "platform_area": area, "minutes": minutes, "line": "x"}
+        code = None if platform_name == "Unknown platform" else platform_name.replace("Platform ", "")
+        return {"mode": mode, "platform": platform_name, "platform_code": code, "platform_area": area,
+                "minutes": minutes, "line": "x"}
 
     def test_modes_then_platforms_in_order(self):
         modes = group_departures([
@@ -313,8 +351,11 @@ class GroupingTest(unittest.TestCase):
             self.dep("U-Bahn / Tram", "Unknown platform", 3),
         ])
         self.assertEqual([m["name"] for m in modes], ["U-Bahn / Tram", "Bus"])
+        self.assertEqual([m["id"] for m in modes], ["u_bahn_tram", "bus"])
         tram, bus = modes
         self.assertEqual([p["name"] for p in tram["platforms"]], ["Platform 2", "Platform 10", "Unknown platform"])
+        self.assertEqual([p["code"] for p in tram["platforms"]], ["2", "10", None])
+        self.assertEqual([p["area"] for p in tram["platforms"]], [None, None, None])
         self.assertEqual([d["minutes"] for d in tram["platforms"][0]["departures"]], [1, 7])
         self.assertFalse(tram["flat"])
         self.assertTrue(bus["flat"])
@@ -326,6 +367,8 @@ class GroupingTest(unittest.TestCase):
         ])
         names = [p["name"] for p in modes[0]["platforms"]]
         self.assertEqual(names, ["Platform A · Hauptbahnhof (Vorplatz)", "Platform A · Hauptbahnhof Süd"])
+        self.assertEqual([(p["code"], p["area"]) for p in modes[0]["platforms"]],
+                         [("A", "Hauptbahnhof (Vorplatz)"), ("A", "Hauptbahnhof Süd")])
 
     def test_platform_sort_key(self):
         names = ["Platform B", "Unknown platform", "Platform 10", "Platform 2", "Platform A"]
@@ -364,6 +407,7 @@ class BoardTest(unittest.TestCase):
         self.stations = {
             self.HBF: {"locations": [{
                 "id": self.HBF, "name": "Stuttgart, Hauptbahnhof (oben)", "type": "stop",
+                "coord": [48.784729, 9.183172],
                 "assignedStops": [
                     # EFA lists S-Bahn (1) here although none stops
                     {"id": self.HBF, "name": "x", "productClasses": [0, 1, 5, 13]},
@@ -392,8 +436,10 @@ class BoardTest(unittest.TestCase):
         result = self.board(self.HBF)
         self.assertEqual([t["id"] for t in result["tabs"]], ["trains", "bus"])
         self.assertEqual(result["tab"], "trains")
-        self.assertEqual(result["stop"], {"id": self.HBF, "name": "Stuttgart, Hauptbahnhof (oben)"})
-        self.assertEqual(result["nearby"], [{"id": self.TIEF, "name": "Stuttgart Hauptbahnhof (tief)"}])
+        self.assertEqual(result["stop"], {"id": self.HBF, "name": "Stuttgart, Hauptbahnhof (oben)",
+                                          "lat": 48.784729, "lon": 9.183172})
+        self.assertEqual(result["nearby"], [{"id": self.TIEF, "name": "Stuttgart Hauptbahnhof (tief)",
+                                             "lat": None, "lon": None}])
         self.assertEqual(result["modes"][0]["name"], "Regional train")
         self.assertIsNone(result["empty"])
         # the board itself asked only for the train classes, in full
@@ -466,7 +512,8 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(result["empty"], "nearby")
         self.assertEqual(result["modes"], [])
         self.assertEqual(result["tabs"], [])
-        self.assertEqual(result["nearby"], [{"id": self.TIEF, "name": "Stuttgart Hauptbahnhof (tief)", "types": ["S-Bahn"]}])
+        self.assertEqual(result["nearby"], [{"id": self.TIEF, "name": "Stuttgart Hauptbahnhof (tief)", "lat": None,
+                                             "lon": None, "types": [{"id": "sbahn", "name": "S-Bahn"}]}])
 
     def test_empty_station_without_any_service(self):
         # like Ehingen: the timetable has nothing, here or nearby

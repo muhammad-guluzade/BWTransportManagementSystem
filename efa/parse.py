@@ -56,6 +56,21 @@ PLATFORM_PREFIX = re.compile(r"^(gleis|bstg\.?|bussteig|bahnsteig|steig|pos\.?|p
 PLATFORM_JUNK = re.compile(r"^[^\W\d_]{3,}$")
 
 
+def slug(name: str) -> str:
+    """A stable id for a display name: 'U-Bahn / Tram' -> 'u_bahn_tram'.
+    Clients (e.g. a mobile app) key translations and icons on it."""
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def lat_lon(coord) -> tuple:
+    """(lat, lon) from a rapidJSON `coord` pair, or (None, None)."""
+    try:
+        lat, lon = float(coord[0]), float(coord[1])
+    except (TypeError, ValueError, IndexError):
+        return None, None
+    return lat, lon
+
+
 def as_list(value) -> list:
     """EFA returns a bare dict instead of a list when there is one item."""
     if value is None:
@@ -75,8 +90,8 @@ def extract_points(stopfinder_response: dict) -> list:
 
 
 def parse_stop(point: dict) -> dict | None:
-    """One stop-search match as {id, name, quality, classes}, or None if
-    it isn't a stop (the search also returns addresses and POIs)."""
+    """One stop-search match as {id, name, lat, lon, quality, classes}, or
+    None if it isn't a stop (the search also returns addresses and POIs)."""
     if point.get("anyType") != "stop":
         return None
     ref = point.get("ref") or {}
@@ -89,11 +104,15 @@ def parse_stop(point: dict) -> dict | None:
         quality = 0
     # "modes" is a comma-separated list of the product classes served at the stop
     classes = [int(m) for m in (point.get("modes") or "").split(",") if m.strip().isdigit()]
+    # the stop search gives "lon,lat" as one string
+    lon, lat = lat_lon(str(ref.get("coords") or "").split(","))
     return {
         "id": stop_id,
         # the full name keeps the district, e.g. "Schwenningen a.N., Bahnhof"
         # where mainLoc would only say "Villingen-Schwenningen"
         "name": point.get("name") or point.get("object", ""),
+        "lat": lat,
+        "lon": lon,
         "quality": quality,
         "classes": classes,
     }
@@ -129,21 +148,25 @@ def tab_names(classes) -> str:
 
 
 def parse_station(station_response: dict) -> dict | None:
-    """A station as {id, name, classes, nearby: [{id, name, classes}]}, or
-    None if EFA doesn't know the stop id."""
+    """A station as {id, name, lat, lon, classes, nearby: [{id, name, lat,
+    lon, classes}]}, or None if EFA doesn't know the stop id."""
     locations = station_response.get("locations") or []
     if not locations or locations[0].get("type") != "stop":
         return None
     location = locations[0]
-    station = {"id": location.get("id"), "name": location.get("name") or "", "classes": [], "nearby": []}
+    lat, lon = lat_lon(location.get("coord"))
+    station = {"id": location.get("id"), "name": location.get("name") or "", "lat": lat, "lon": lon,
+               "classes": [], "nearby": []}
     # assignedStops lists the station itself plus the stations EFA links to it
     for assigned in location.get("assignedStops") or []:
         if assigned.get("id") == station["id"]:
             station["classes"] = assigned.get("productClasses") or []
         elif assigned.get("id") and assigned.get("name"):
-            station["nearby"].append(
-                {"id": assigned["id"], "name": assigned["name"], "classes": assigned.get("productClasses") or []}
-            )
+            lat, lon = lat_lon(assigned.get("coord"))
+            station["nearby"].append({
+                "id": assigned["id"], "name": assigned["name"], "lat": lat, "lon": lon,
+                "classes": assigned.get("productClasses") or [],
+            })
     return station
 
 
@@ -193,14 +216,21 @@ def line_name(transportation: dict) -> str:
 
 # --- departures: places ----------------------------------------------------
 
-def platform_label(location: dict) -> str:
-    """'Gleis 3', 'Bstg. A', 'Pos. 2', '101' -> 'Platform 3', 'Platform A', ..."""
+def platform_code(location: dict) -> str | None:
+    """The bare platform, without the regional prefix: 'Gleis 3', 'Bstg. A',
+    'Pos. 2', '101' -> '3', 'A', '2', '101'. None if EFA gives no platform."""
     props = location.get("properties") or {}
     raw = (props.get("platformName") or props.get("platform") or "").strip()
-    name = PLATFORM_PREFIX.sub("", raw).strip()
-    if not name or PLATFORM_JUNK.match(name):
-        return UNKNOWN_PLATFORM
-    return "Platform " + name
+    code = PLATFORM_PREFIX.sub("", raw).strip()
+    if not code or PLATFORM_JUNK.match(code):
+        return None
+    return code
+
+
+def platform_label(location: dict) -> str:
+    """'Platform 3', 'Platform A', ... or 'Unknown platform'."""
+    code = platform_code(location)
+    return f"Platform {code}" if code else UNKNOWN_PLATFORM
 
 
 def locality(location: dict) -> str:
@@ -293,6 +323,12 @@ def iso(moment: datetime | None) -> str | None:
     return moment.isoformat().replace("+00:00", "Z") if moment else None
 
 
+def whole_minutes(delta) -> int:
+    """Full minutes of a time difference, rounded towards zero: 40 seconds
+    late is not yet "+1 min" (the clock would show the same minute twice)."""
+    return int(delta.total_seconds() / 60)
+
+
 def parse_departure(event: dict, now: datetime | None = None) -> dict:
     """One stop event as a flat dict the rest of the app works with."""
     now = now or datetime.now(timezone.utc)
@@ -304,23 +340,24 @@ def parse_departure(event: dict, now: datetime | None = None) -> dict:
     # prefer the live time if EFA sent one, else the scheduled one
     estimated = parse_time(event.get("departureTimeEstimated"))
     actual = estimated or planned
-    direction = short_name((transportation.get("destination") or {}).get("name") or "?", city)
+    destination = short_name((transportation.get("destination") or {}).get("name") or "?", city)
 
     return {
         "mode": mode_group(transportation),
         "platform": platform_label(location),
+        "platform_code": platform_code(location),
         # sub-stop the platform belongs to, e.g. "Hauptbahnhof (tief)"
         "platform_area": short_name(location.get("name") or "", city),
         "line": line_name(transportation),
-        "direction": direction,
+        "destination": destination,
         # on ring lines the sign on the vehicle names a stop on the way, not
         # the last stop; don't list it a second time as a via stop
-        "via": [stop for stop in via_stops(event) if stop != direction],
+        "via": [stop for stop in via_stops(event) if stop != destination],
         "dticket": dticket_valid(transportation) is True,
         "time": iso(actual),
         "planned": iso(planned),
         "minutes": max(0, round((actual - now).total_seconds() / 60)) if actual else None,
-        "delay": round((estimated - planned).total_seconds() / 60) if estimated and planned else None,
+        "delay": whole_minutes(estimated - planned) if estimated and planned else None,
         "realtime": estimated is not None,
         "cancelled": event.get("isCancelled") is True,
     }

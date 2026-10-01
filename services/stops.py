@@ -25,7 +25,12 @@ def parse_points(points: list) -> list:
 
 
 def search(query: str) -> list:
-    """Stops matching `query`, best match first, as [{id, name}]."""
+    """Stops matching `query`, best match first, as
+    [{id, name, lat, lon, types: [{id, name}]}].
+
+    `types` is what EFA's search says stops there; it can include a type
+    that has no departures (the station page checks that, the search can't
+    afford to)."""
     query = query.strip()
     if len(query) < 2:
         return []
@@ -53,8 +58,8 @@ def search(query: str) -> list:
     results = []
     for s in unique:
         name = s["name"]
-        types = parse.tab_names(s["classes"])
+        types = [{"id": t["id"], "name": t["name"]} for t in parse.tabs_for(s["classes"])]
         if name_counts[name] > 1 and types:
-            name = f"{name} · {types}"
-        results.append({"id": s["id"], "name": name})
+            name = f"{name} · {', '.join(t['name'] for t in types)}"
+        results.append({"id": s["id"], "name": name, "lat": s["lat"], "lon": s["lon"], "types": types})
     return results

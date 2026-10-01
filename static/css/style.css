@@ -28,11 +28,11 @@ input[type=text] { width: 100%; padding: 10px; font-size: 1rem; box-sizing: bord
 .mode-section { margin-top: 28px; }
 .mode-section:first-of-type { margin-top: 20px; }
 .mode-header { font-size: 1.05rem; font-weight: bold; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 3px solid #999; color: #333; }
-.mode-header.mode-u-bahn-tram { border-color: #005aa9; color: #005aa9; }
-.mode-header.mode-s-bahn { border-color: #2e8b47; color: #2e8b47; }
+.mode-header.mode-u_bahn_tram { border-color: #005aa9; color: #005aa9; }
+.mode-header.mode-s_bahn { border-color: #2e8b47; color: #2e8b47; }
 .mode-header.mode-bus { border-color: #a1338f; color: #a1338f; }
-.mode-header.mode-regional-train,
-.mode-header.mode-long-distance-train { border-color: #c1121c; color: #c1121c; }
+.mode-header.mode-regional_train,
+.mode-header.mode-long_distance_train { border-color: #c1121c; color: #c1121c; }
 table { width: 100%; border-collapse: collapse; }
 td { padding: 8px 12px; border-bottom: 1px solid #eee; vertical-align: top; }
 tr:last-child td { border-bottom: none; }
@@ -49,3 +49,11 @@ tr.cancelled .destination, tr.cancelled .via { text-decoration: line-through; co
 tr.cancelled .line-badge { background: #999; }
 .show-more { display: block; width: 100%; padding: 8px; font: inherit; font-size: 0.9rem; border: none; border-top: 1px solid #eee; background: #f7f7f7; color: #005aa9; cursor: pointer; }
 .show-more:hover { background: #eef; }
+
+/* "Show API response": the raw JSON behind the page */
+#raw { margin: 32px 0 40px; }
+.raw-toggle { padding: 6px 12px; font: inherit; font-size: 0.85rem; border: 1px solid #aaa; border-radius: 4px; background: white; color: #333; cursor: pointer; }
+.raw-toggle:hover { background: #eef; }
+.raw-url { margin-top: 12px; font-family: ui-monospace, Consolas, monospace; font-size: 0.85rem; color: #666; word-break: break-all; }
+.raw-url a { color: #005aa9; }
+.raw-json { margin-top: 8px; padding: 12px; max-height: 480px; overflow: auto; border: 1px solid #ddd; border-radius: 6px; background: #f7f7f7; font-family: ui-monospace, Consolas, monospace; font-size: 0.8rem; line-height: 1.4; }

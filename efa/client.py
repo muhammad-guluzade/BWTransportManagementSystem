@@ -97,6 +97,7 @@ def get_station(stop_id: str) -> dict:
             "mode": "direct",
             "limit": 1,
             "depType": "stopEvents",
+            "coordOutputFormat": "WGS84[dd.ddddd]",
         },
         ttl=STATION_TTL,
     )

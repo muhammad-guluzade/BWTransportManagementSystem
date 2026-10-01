@@ -2,42 +2,31 @@
 Flask app for looking up stops in Baden-Württemberg and showing live
 departures grouped by transport mode, then by platform within each mode.
 
-This file only holds the routes:
+This file only wires things together:
+  api/v1.py      -- the JSON API (see docs/API.md)
   efa/client.py  -- HTTP calls to the EFA API (with caching)
   efa/parse.py   -- raw EFA JSON -> clean values (modes, platforms, ...)
   services/      -- stop search and the departure board
+  templates/     -- the web pages, which use the JSON API like any client
 """
 
 from flask import Flask, jsonify, render_template, request
 
-from efa.client import EfaError
-from services import departures, stops
+from api import v1
 
 app = Flask(__name__)
+app.json.sort_keys = False  # keep fields in the order the API documents them
+app.register_blueprint(v1.bp)
 
 
-@app.errorhandler(EfaError)
-def efa_unavailable(error):
-    app.logger.warning("EFA request failed: %s", error)
-    return jsonify({"error": "The timetable service is not responding. Please try again."}), 502
-
-
-@app.route("/api/search_stops")
-def search_stops():
-    return jsonify(stops.search(request.args.get("q", "")))
-
-
-@app.errorhandler(departures.UnknownStop)
-def unknown_stop(error):
-    return jsonify({"error": "This stop could not be found."}), 404
-
-
-@app.route("/api/departures")
-def get_departures():
-    stop_id = request.args.get("stop_id", "").strip()
-    if not stop_id:
-        return jsonify({"error": "missing stop_id"}), 400
-    return jsonify(departures.board(stop_id, request.args.get("tab", "")))
+@app.errorhandler(404)
+@app.errorhandler(405)
+def not_found(exc):
+    # API clients get JSON errors; browsers get the normal error page
+    if request.path.startswith("/api/"):
+        code = "not_found" if exc.code == 404 else "method_not_allowed"
+        return jsonify({"error": {"code": code, "message": exc.description}}), exc.code
+    return exc
 
 
 @app.route("/")

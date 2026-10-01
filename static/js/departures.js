@@ -1,8 +1,12 @@
+// This page is one client of the JSON API described in docs/API.md.
+const API = '/api/v1';
+
 const input = document.getElementById('stop-input');
 const resultsBox = document.getElementById('results');
 const stationBox = document.getElementById('station');
 const board = document.getElementById('board');
 const status = document.getElementById('status');
+const rawBox = document.getElementById('raw');
 let debounceTimer;
 let refreshTimer;
 
@@ -15,6 +19,8 @@ const PER_PLATFORM = 10;
 let currentStopId = null;
 let currentTab = '';
 let lastData = null;
+let lastUrl = '';              // the API address lastData came from
+let showRaw = false;           // "Show API response" is switched on
 let requestCounter = 0;        // to ignore answers that arrive out of order
 const expanded = new Set();    // platforms the user clicked "Show more" on
 
@@ -45,22 +51,23 @@ function el(tag, className, text) {
   return node;
 }
 
+// API errors look like {error: {code, message}}
 async function errorMessage(res, fallback) {
   try {
-    return (await res.json()).error || fallback;
+    return (await res.json()).error.message || fallback;
   } catch {
     return fallback;
   }
 }
 
 async function searchStops(q) {
-  const res = await fetch(`/api/search_stops?q=${encodeURIComponent(q)}`);
+  const res = await fetch(`${API}/stops/search?q=${encodeURIComponent(q)}`);
   if (!res.ok) {
     resultsBox.innerHTML = '';
     status.textContent = await errorMessage(res, 'Could not search stops.');
     return;
   }
-  const stops = await res.json();
+  const { stops } = await res.json();
   resultsBox.innerHTML = '';
   stops.forEach(s => {
     const div = el('div', '', s.name);
@@ -77,6 +84,8 @@ function selectStop(id, name) {
   expanded.clear();
   stationBox.innerHTML = '';
   board.innerHTML = '';
+  rawBox.innerHTML = '';
+  lastData = null;
   status.textContent = `Loading departures for ${name}...`;
   loadDepartures();
   clearInterval(refreshTimer);
@@ -93,7 +102,7 @@ function selectTab(tabId) {
 
 async function loadDepartures() {
   const request = ++requestCounter;
-  const url = `/api/departures?stop_id=${encodeURIComponent(currentStopId)}&tab=${encodeURIComponent(currentTab)}`;
+  const url = `${API}/stops/${encodeURIComponent(currentStopId)}/departures?tab=${encodeURIComponent(currentTab)}`;
   let res;
   try {
     res = await fetch(url);
@@ -107,6 +116,7 @@ async function loadDepartures() {
     return;
   }
   lastData = await res.json();
+  lastUrl = url;
   currentTab = lastData.tab || '';
   render();
   status.textContent = 'Updated ' + new Date().toLocaleTimeString();
@@ -115,6 +125,25 @@ async function loadDepartures() {
 function render() {
   renderStation(lastData);
   renderBoard(lastData);
+  renderRaw();
+}
+
+// "Show API response": the exact JSON this page was built from, for
+// checking what the API sends without any extra tools
+function renderRaw() {
+  rawBox.innerHTML = '';
+  const toggle = el('button', 'raw-toggle', showRaw ? 'Hide API response' : 'Show API response');
+  toggle.onclick = () => { showRaw = !showRaw; renderRaw(); };
+  rawBox.appendChild(toggle);
+  if (!showRaw) return;
+
+  const source = el('div', 'raw-url', 'GET ');
+  const link = el('a', '', lastUrl);
+  link.href = lastUrl;
+  link.target = '_blank';
+  source.appendChild(link);
+  rawBox.appendChild(source);
+  rawBox.appendChild(el('pre', 'raw-json', JSON.stringify(lastData, null, 2)));
 }
 
 // a link that opens another station
@@ -150,10 +179,6 @@ function renderStation(data) {
   }
 }
 
-function modeSlug(name) {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-}
-
 function formatTime(iso) {
   return iso ? timeFormat.format(new Date(iso)) : '?';
 }
@@ -168,7 +193,7 @@ function renderDeparture(dep) {
   // destination, D-Ticket label, and the major stops on the way
   const directionCell = el('td');
   const direction = el('div', 'direction');
-  direction.appendChild(el('span', 'destination', dep.direction));
+  direction.appendChild(el('span', 'destination', dep.destination));
   if (dep.dticket) direction.appendChild(el('span', 'dticket', 'D-Ticket'));
   directionCell.appendChild(direction);
   if (dep.via.length) {
@@ -207,7 +232,7 @@ function renderPlatform(mode, platform) {
     block.appendChild(el('div', 'platform-title', platform.name));
   }
 
-  const key = `${mode.name}|${platform.name}`;
+  const key = `${mode.id}|${platform.name}`;
   const hidden = expanded.has(key) ? 0 : Math.max(0, platform.departures.length - PER_PLATFORM);
   const shown = platform.departures.slice(0, platform.departures.length - hidden);
 
@@ -232,7 +257,9 @@ function renderEmpty(data) {
     data.nearby.forEach(stop => {
       const item = el('li');
       item.appendChild(stopLink(stop));
-      if (stop.types.length) item.appendChild(document.createTextNode(' (' + stop.types.join(', ') + ')'));
+      if (stop.types.length) {
+        item.appendChild(document.createTextNode(' (' + stop.types.map(t => t.name).join(', ') + ')'));
+      }
       list.appendChild(item);
     });
     notice.appendChild(list);
@@ -253,7 +280,7 @@ function renderBoard(data) {
   // modes and platforms within them already arrive pre-sorted from the backend
   data.modes.forEach(mode => {
     const section = el('div', 'mode-section');
-    section.appendChild(el('div', `mode-header mode-${modeSlug(mode.name)}`, mode.name));
+    section.appendChild(el('div', `mode-header mode-${mode.id}`, mode.name));
     mode.platforms.forEach(platform => section.appendChild(renderPlatform(mode, platform)));
     board.appendChild(section);
   });

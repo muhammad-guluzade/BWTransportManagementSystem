@@ -64,16 +64,18 @@ def dedupe(departures: list) -> list:
     created from live data. Keep one, preferring the copy with live data."""
     kept = {}
     for dep in departures:
-        key = (dep["mode"], dep["platform"], dep["platform_area"], dep["line"], dep["direction"], dep["planned"])
+        key = (dep["mode"], dep["platform"], dep["platform_area"], dep["line"], dep["destination"], dep["planned"])
         if key not in kept or (dep["realtime"] and not kept[key]["realtime"]):
             kept[key] = dep
     return list(kept.values())
 
 
 def group_departures(departures: list) -> list:
-    """[{name, flat, platforms: [{name, departures: [...]}]}], ready to render.
+    """[{id, name, flat, platforms: [{code, name, area, departures: [...]}]}].
 
-    Lists rather than dicts so the order survives JSON serialisation."""
+    `name` is display text; `id` / `code` are the stable values behind it,
+    for clients that build their own labels. Lists rather than dicts so the
+    order survives JSON serialisation."""
     # mode -> (platform label, sub-stop) -> departures. The sub-stop is part of
     # the key because one station can have two different "Platform 1"s, e.g.
     # a tram "Gleis 1" and a bus "Pos. 1" in different parts of the station.
@@ -90,14 +92,20 @@ def group_departures(departures: list) -> list:
         platforms = []
         for label, area in sorted(by_platform, key=lambda k: (platform_sort_key(k[0]), k[1])):
             # only spell out the sub-stop when the label alone is ambiguous
-            name = f"{label} · {area}" if labels.count(label) > 1 and area else label
+            ambiguous = labels.count(label) > 1 and area
             rows = sorted(by_platform[(label, area)], key=lambda d: (d["minutes"] is None, d["minutes"]))
+            code = rows[0]["platform_code"]
             for row in rows:
-                del row["mode"], row["platform"], row["platform_area"]
-            platforms.append({"name": name, "departures": rows})
+                del row["mode"], row["platform"], row["platform_code"], row["platform_area"]
+            platforms.append({
+                "code": code,
+                "name": f"{label} · {area}" if ambiguous else label,
+                "area": area if ambiguous else None,
+                "departures": rows,
+            })
 
         # fewer than 2 distinct platforms within this mode -> flat list
-        modes.append({"name": mode, "flat": len(platforms) < 2, "platforms": platforms})
+        modes.append({"id": parse.slug(mode), "name": mode, "flat": len(platforms) < 2, "platforms": platforms})
     return modes
 
 
@@ -157,16 +165,21 @@ def nearby_with_service(nearby: list) -> list:
     with ThreadPoolExecutor(max_workers=len(nearby)) as pool:
         tabs = list(pool.map(lambda n: available_tabs(n["id"], n["classes"]), nearby))
     return [
-        {"id": n["id"], "name": n["name"], "types": [t["name"] for t in station_tabs]}
+        {**public_stop(n), "types": [{"id": t["id"], "name": t["name"]} for t in station_tabs]}
         for n, station_tabs in zip(nearby, tabs)
         if station_tabs
     ]
 
 
+def public_stop(stop: dict) -> dict:
+    return {"id": stop["id"], "name": stop["name"], "lat": stop["lat"], "lon": stop["lon"]}
+
+
 def board(stop_id: str, tab_id: str = "") -> dict:
     """The departure board for one station and tab:
-    {stop: {id, name}, nearby: [{id, name}], tabs: [{id, name}], tab,
-     modes: [...], empty: None | "nearby" | "no_service"}."""
+    {stop: {id, name, lat, lon}, nearby: [{id, name, lat, lon}],
+     tabs: [{id, name}], tab, modes: [...],
+     empty: None | "nearby" | "no_service"}."""
     station = parse.parse_station(client.get_station(stop_id))
     # EFA resolves an id it doesn't know to whatever stop matches loosely,
     # anywhere in Europe; only accept stations in Baden-Württemberg
@@ -184,10 +197,10 @@ def board(stop_id: str, tab_id: str = "") -> dict:
         nearby = nearby_with_service(nearby)
         empty = EMPTY_NEARBY if nearby else EMPTY_NO_SERVICE
     else:
-        nearby = [{"id": n["id"], "name": n["name"]} for n in nearby]
+        nearby = [public_stop(n) for n in nearby]
 
     return {
-        "stop": {"id": station["id"], "name": station["name"]},
+        "stop": public_stop(station),
         "nearby": nearby,
         "tabs": [{"id": t["id"], "name": t["name"]} for t in tabs],
         "tab": tab["id"] if tab else None,
