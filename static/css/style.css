@@ -16,6 +16,12 @@ input[type=text] { width: 100%; padding: 10px; font-size: 1rem; box-sizing: bord
 .tab:hover { background: #eef; }
 .tab.active { background: #333; border-color: #333; color: white; }
 
+/* shown instead of the board when a station has no departures */
+.notice { margin-top: 18px; padding: 4px 16px; border: 1px solid #e0c36a; border-radius: 6px; background: #fff8e1; }
+.notice ul { margin: 0 0 14px; padding-left: 20px; }
+.notice li { margin-top: 4px; }
+.notice a { color: #005aa9; }
+
 /* departure board */
 .platform-block { margin-top: 10px; border: 1px solid #ddd; border-radius: 6px; overflow: hidden; }
 .platform-title { font-weight: bold; background: #333; color: white; padding: 8px 12px; }

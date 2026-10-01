@@ -41,11 +41,14 @@ TABS = [
     ("trains", "Trains", (0, 13, 14, 15, 16)),
     ("sbahn", "S-Bahn", (1,)),
     ("tram", "U-Bahn / Tram", (2, 3, 4)),
-    ("bus", "Bus", (5, 6, 7, 10, 17, 19)),
+    ("bus", "Bus", (5, 6, 7, 17, 19)),
     ("ferry", "Ferry", (9,)),
     ("cablecar", "Cable car", (8,)),
 ]
 OTHER_TAB = ("other", "Other")
+# Not scheduled public transport, so left out of the app entirely:
+# 10 = on-demand taxis / call buses, 12 = flights
+EXCLUDED_CLASSES = {10, 12}
 
 UNKNOWN_PLATFORM = "Unknown platform"
 PLATFORM_PREFIX = re.compile(r"^(gleis|bstg\.?|bussteig|bahnsteig|steig|pos\.?|platform)\s*", re.IGNORECASE)
@@ -106,7 +109,7 @@ def in_baden_wuerttemberg(stop_id: str) -> bool:
 def tabs_for(classes) -> list:
     """The tabs a station with these product classes could have, as
     [{id, name, classes}]. Classes we don't know end up in an 'Other' tab."""
-    classes = set(classes)
+    classes = set(classes or ()) - EXCLUDED_CLASSES
     tabs = []
     for tab_id, name, tab_classes in TABS:
         if classes & set(tab_classes):
@@ -126,8 +129,8 @@ def tab_names(classes) -> str:
 
 
 def parse_station(station_response: dict) -> dict | None:
-    """A station as {id, name, classes, nearby: [{id, name}]}, or None if
-    EFA doesn't know the stop id."""
+    """A station as {id, name, classes, nearby: [{id, name, classes}]}, or
+    None if EFA doesn't know the stop id."""
     locations = station_response.get("locations") or []
     if not locations or locations[0].get("type") != "stop":
         return None
@@ -138,11 +141,19 @@ def parse_station(station_response: dict) -> dict | None:
         if assigned.get("id") == station["id"]:
             station["classes"] = assigned.get("productClasses") or []
         elif assigned.get("id") and assigned.get("name"):
-            station["nearby"].append({"id": assigned["id"], "name": assigned["name"]})
+            station["nearby"].append(
+                {"id": assigned["id"], "name": assigned["name"], "classes": assigned.get("productClasses") or []}
+            )
     return station
 
 
 # --- departures: transport -------------------------------------------------
+
+def is_excluded(event: dict) -> bool:
+    """Flights and on-demand services are not shown at all."""
+    product = (event.get("transportation") or {}).get("product") or {}
+    return product.get("class") in EXCLUDED_CLASSES
+
 
 def transport_attrs(transportation: dict) -> set:
     return set((transportation.get("properties") or {}).get("attributes") or [])
@@ -293,6 +304,7 @@ def parse_departure(event: dict, now: datetime | None = None) -> dict:
     # prefer the live time if EFA sent one, else the scheduled one
     estimated = parse_time(event.get("departureTimeEstimated"))
     actual = estimated or planned
+    direction = short_name((transportation.get("destination") or {}).get("name") or "?", city)
 
     return {
         "mode": mode_group(transportation),
@@ -300,8 +312,10 @@ def parse_departure(event: dict, now: datetime | None = None) -> dict:
         # sub-stop the platform belongs to, e.g. "Hauptbahnhof (tief)"
         "platform_area": short_name(location.get("name") or "", city),
         "line": line_name(transportation),
-        "direction": short_name((transportation.get("destination") or {}).get("name") or "?", city),
-        "via": via_stops(event),
+        "direction": direction,
+        # on ring lines the sign on the vehicle names a stop on the way, not
+        # the last stop; don't list it a second time as a via stop
+        "via": [stop for stop in via_stops(event) if stop != direction],
         "dticket": dticket_valid(transportation) is True,
         "time": iso(actual),
         "planned": iso(planned),

@@ -117,18 +117,24 @@ function render() {
   renderBoard(lastData);
 }
 
+// a link that opens another station
+function stopLink(stop) {
+  const link = el('a', '', stop.name);
+  link.href = '#';
+  link.onclick = (e) => { e.preventDefault(); selectStop(stop.id, stop.name); };
+  return link;
+}
+
 function renderStation(data) {
   stationBox.innerHTML = '';
   stationBox.appendChild(el('h2', 'station-name', data.stop.name));
 
-  if (data.nearby.length) {
+  // when the board is empty the nearby stations are shown in its place instead
+  if (data.nearby.length && !data.empty) {
     const nearby = el('div', 'nearby', 'Also nearby: ');
     data.nearby.forEach((stop, i) => {
       if (i > 0) nearby.appendChild(document.createTextNode(' · '));
-      const link = el('a', '', stop.name);
-      link.href = '#';
-      link.onclick = (e) => { e.preventDefault(); selectStop(stop.id, stop.name); };
-      nearby.appendChild(link);
+      nearby.appendChild(stopLink(stop));
     });
     stationBox.appendChild(nearby);
   }
@@ -217,10 +223,30 @@ function renderPlatform(mode, platform) {
   return block;
 }
 
+// an empty board says why it is empty
+function renderEmpty(data) {
+  const notice = el('div', 'notice');
+  if (data.empty === 'nearby') {
+    notice.appendChild(el('p', '', 'Nothing departs from this station itself, but there are departures right next to it:'));
+    const list = el('ul');
+    data.nearby.forEach(stop => {
+      const item = el('li');
+      item.appendChild(stopLink(stop));
+      if (stop.types.length) item.appendChild(document.createTextNode(' (' + stop.types.join(', ') + ')'));
+      list.appendChild(item);
+    });
+    notice.appendChild(list);
+  } else {
+    notice.appendChild(el('p', '', 'The timetable has no departures for this station at the moment. '
+      + 'The line may be closed or not running in this period.'));
+  }
+  return notice;
+}
+
 function renderBoard(data) {
   board.innerHTML = '';
   if (data.modes.length === 0) {
-    board.appendChild(el('p', '', 'No departures found for this stop right now.'));
+    board.appendChild(renderEmpty(data));
     return;
   }
 

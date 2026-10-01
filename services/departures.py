@@ -1,9 +1,12 @@
 """Departure board: one station's upcoming departures for one transport type
 (tab), grouped by mode, then by platform within each mode."""
+import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 
 from efa import client, parse
+
+log = logging.getLogger(__name__)
 
 # Display order for mode groups; anything else is appended alphabetically.
 MODE_ORDER = [
@@ -15,8 +18,11 @@ MODE_ORDER = [
     "Long-distance bus",
     "Ferry",
     "Cable car",
-    "On-demand",
 ]
+
+# why a board has no departures
+EMPTY_NEARBY = "nearby"          # nothing here, but linked stations have service
+EMPTY_NO_SERVICE = "no_service"  # the timetable has nothing for this station
 
 
 class UnknownStop(Exception):
@@ -33,6 +39,35 @@ def platform_sort_key(name: str):
         return (2, 0, name)
     number = re.search(r"\d+", name)
     return (0, int(number.group()), name) if number else (1, 0, name)
+
+
+def parse_events(events) -> list:
+    """Stop events as departure dicts. Flights and on-demand services are
+    left out, and so is any event that can't be read: one malformed
+    departure from EFA must not take the whole board down."""
+    departures = []
+    for event in events if isinstance(events, list) else []:
+        try:
+            if parse.is_excluded(event):
+                continue
+            departure = parse.parse_departure(event)
+            # without a departure time there is nothing to show
+            if departure["time"]:
+                departures.append(departure)
+        except Exception:  # noqa: BLE001 -- whatever EFA sent, skip just this row
+            log.warning("Skipping a departure that could not be read", exc_info=True)
+    return departures
+
+
+def dedupe(departures: list) -> list:
+    """EFA sometimes sends one trip twice: the timetable entry plus a copy
+    created from live data. Keep one, preferring the copy with live data."""
+    kept = {}
+    for dep in departures:
+        key = (dep["mode"], dep["platform"], dep["platform_area"], dep["line"], dep["direction"], dep["planned"])
+        if key not in kept or (dep["realtime"] and not kept[key]["realtime"]):
+            kept[key] = dep
+    return list(kept.values())
 
 
 def group_departures(departures: list) -> list:
@@ -71,41 +106,91 @@ def has_departures(stop_id: str, classes) -> bool:
     return bool(data.get("stopEvents"))
 
 
-def available_tabs(station: dict) -> list:
-    """The station's tabs, without the ones that have no departures.
+def available_tabs(stop_id: str, classes) -> list:
+    """The tabs of a station, without the ones that have no departures.
 
     EFA's list of transport types per station isn't reliable -- it lists
-    S-Bahn at Stuttgart Hbf (oben), where none stops -- so each candidate
-    tab is checked with one tiny request (cached for an hour)."""
-    tabs = parse.tabs_for(station["classes"])
-    if len(tabs) < 2:
-        return tabs
+    trains at Stuttgart's Arnulf-Klett-Platz, where none stop -- so each
+    candidate tab is checked with one tiny request (cached for an hour)."""
+    tabs = parse.tabs_for(classes)
+    if not tabs:
+        return []
     with ThreadPoolExecutor(max_workers=len(tabs)) as pool:
-        served = list(pool.map(lambda tab: has_departures(station["id"], tab["classes"]), tabs))
+        served = list(pool.map(lambda tab: has_departures(stop_id, tab["classes"]), tabs))
     return [tab for tab, ok in zip(tabs, served) if ok]
+
+
+def load_tab(station: dict, tab_id: str):
+    """(tabs with departures, selected tab, its departures).
+
+    The wanted tab's departures and the checks of the other tabs are
+    fetched at the same time, so opening a station costs one round of
+    requests instead of two."""
+    candidates = parse.tabs_for(station["classes"])
+    if not candidates:
+        # EFA didn't say what stops here; ask for everything instead
+        return [], None, parse_events(client.get_departures(station["id"]).get("stopEvents"))
+
+    wanted = next((t for t in candidates if t["id"] == tab_id), candidates[0])
+    others = [t for t in candidates if t is not wanted]
+    with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
+        fetch = pool.submit(client.get_departures, station["id"], wanted["classes"])
+        checks = [pool.submit(has_departures, station["id"], t["classes"]) for t in others]
+        departures = parse_events(fetch.result().get("stopEvents"))
+        served = {t["id"] for t, check in zip(others, checks) if check.result()}
+    if departures:
+        served.add(wanted["id"])
+
+    tabs = [t for t in candidates if t["id"] in served]
+    if not departures and tabs:
+        # the wanted tab turned out to be empty: show the first one that isn't
+        wanted = tabs[0]
+        departures = parse_events(client.get_departures(station["id"], wanted["classes"]).get("stopEvents"))
+    return tabs, (wanted if departures else None), departures
+
+
+def nearby_with_service(nearby: list) -> list:
+    """Of the linked stations, those that have departures, each with the
+    transport types that really stop there: [{id, name, types: [...]}]."""
+    if not nearby:
+        return []
+    with ThreadPoolExecutor(max_workers=len(nearby)) as pool:
+        tabs = list(pool.map(lambda n: available_tabs(n["id"], n["classes"]), nearby))
+    return [
+        {"id": n["id"], "name": n["name"], "types": [t["name"] for t in station_tabs]}
+        for n, station_tabs in zip(nearby, tabs)
+        if station_tabs
+    ]
 
 
 def board(stop_id: str, tab_id: str = "") -> dict:
     """The departure board for one station and tab:
-    {stop: {id, name}, nearby: [{id, name}], tabs: [{id, name}], tab, modes: [...]}."""
+    {stop: {id, name}, nearby: [{id, name}], tabs: [{id, name}], tab,
+     modes: [...], empty: None | "nearby" | "no_service"}."""
     station = parse.parse_station(client.get_station(stop_id))
     # EFA resolves an id it doesn't know to whatever stop matches loosely,
     # anywhere in Europe; only accept stations in Baden-Württemberg
     if not station or not parse.in_baden_wuerttemberg(station["id"] or ""):
         raise UnknownStop(stop_id)
-    station["nearby"] = [n for n in station["nearby"] if parse.in_baden_wuerttemberg(n["id"])]
+    nearby = [n for n in station["nearby"] if parse.in_baden_wuerttemberg(n["id"])]
 
-    tabs = available_tabs(station)
-    tab = next((t for t in tabs if t["id"] == tab_id), tabs[0] if tabs else None)
+    tabs, tab, departures = load_tab(station, tab_id)
+    departures = dedupe(departures)
 
-    # no tabs = EFA didn't say what stops here; ask for everything instead
-    data = client.get_departures(station["id"], tab["classes"] if tab else ())
-    departures = [parse.parse_departure(event) for event in data.get("stopEvents") or []]
+    empty = None
+    if not departures:
+        # say why: a station can be empty while the one next door has all the
+        # service (e.g. rail replacement buses leaving from the bus station)
+        nearby = nearby_with_service(nearby)
+        empty = EMPTY_NEARBY if nearby else EMPTY_NO_SERVICE
+    else:
+        nearby = [{"id": n["id"], "name": n["name"]} for n in nearby]
 
     return {
         "stop": {"id": station["id"], "name": station["name"]},
-        "nearby": station["nearby"],
+        "nearby": nearby,
         "tabs": [{"id": t["id"], "name": t["name"]} for t in tabs],
         "tab": tab["id"] if tab else None,
         "modes": group_departures(departures),
+        "empty": empty,
     }

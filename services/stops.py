@@ -1,9 +1,27 @@
 """Stop search: find stops in Baden-Württemberg by name."""
+import logging
 from collections import Counter
 
 from efa import client, parse
 
+log = logging.getLogger(__name__)
+
 MAX_RESULTS = 15
+
+
+def parse_points(points: list) -> list:
+    """Search matches as stop dicts, skipping non-stops and any match that
+    can't be read (one malformed entry must not break the whole search)."""
+    stops = []
+    for point in points:
+        try:
+            stop = parse.parse_stop(point)
+        except Exception:  # noqa: BLE001 -- whatever EFA sent, skip just this match
+            log.warning("Skipping a search match that could not be read", exc_info=True)
+            continue
+        if stop:
+            stops.append(stop)
+    return stops
 
 
 def search(query: str) -> list:
@@ -13,7 +31,7 @@ def search(query: str) -> list:
         return []
 
     points = parse.extract_points(client.find_stops(query))
-    stops = [s for s in map(parse.parse_stop, points) if s and parse.in_baden_wuerttemberg(s["id"])]
+    stops = [s for s in parse_points(points) if parse.in_baden_wuerttemberg(s["id"])]
 
     # quality is EFA's own match-confidence score (0-1000): a major
     # interchange scores far higher than a street-level bus stop that merely

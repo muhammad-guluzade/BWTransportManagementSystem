@@ -20,6 +20,11 @@ DEPARTURES_TTL = 30
 STATION_TTL = 6 * 3600
 TAB_CHECK_TTL = 3600
 
+# one shared session reuses connections to EFA instead of opening a new one
+# (TCP + TLS handshake) for every request
+_session = requests.Session()
+_session.headers.update(HEADERS)
+
 _CACHE_MAX_ENTRIES = 500
 _cache = {}  # key -> (expires_at, data)
 _cache_lock = threading.Lock()
@@ -42,7 +47,7 @@ def efa_get(endpoint: str, params: dict, ttl: int = 0) -> dict:
                 return hit[1]
 
     try:
-        resp = requests.get(EFA_BASE + endpoint, params=params, headers=HEADERS, timeout=TIMEOUT)
+        resp = _session.get(EFA_BASE + endpoint, params=params, timeout=TIMEOUT)
         resp.raise_for_status()
         resp.encoding = "utf-8"  # EFA doesn't declare charset correctly; don't let requests guess
         data = resp.json()

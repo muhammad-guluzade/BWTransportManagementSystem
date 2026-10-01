@@ -208,8 +208,8 @@ class StationTest(unittest.TestCase):
         self.assertEqual(station["name"], "Stuttgart, Hauptbahnhof (oben)")
         self.assertEqual(station["classes"], [0, 1, 13, 16])
         self.assertEqual(station["nearby"], [
-            {"id": "de:08111:6118", "name": "Stuttgart Hauptbahnhof (tief)"},
-            {"id": "de:08111:6112", "name": "Hauptbf (Arnulf-Klett-Platz)"},
+            {"id": "de:08111:6118", "name": "Stuttgart Hauptbahnhof (tief)", "classes": [1]},
+            {"id": "de:08111:6112", "name": "Hauptbf (Arnulf-Klett-Platz)", "classes": [0, 3, 5, 6, 11]},
         ])
 
     def test_unknown_stop(self):
@@ -226,6 +226,17 @@ class StationTest(unittest.TestCase):
         tabs = parse.tabs_for([3, 11])
         self.assertEqual([(t["id"], t["classes"]) for t in tabs], [("tram", [2, 3, 4]), ("other", [11])])
         self.assertEqual(parse.tabs_for([]), [])
+
+    def test_flights_and_on_demand_are_left_out(self):
+        # Stuttgart airport: S-Bahn, Stadtbahn, buses, flights (12)
+        tabs = parse.tabs_for([1, 3, 5, 6, 7, 12])
+        self.assertEqual([t["id"] for t in tabs], ["sbahn", "tram", "bus"])
+        self.assertEqual(parse.tabs_for([10, 12]), [])
+        self.assertNotIn(10, parse.tabs_for([5, 10])[0]["classes"])
+        self.assertTrue(parse.is_excluded({"transportation": transport(12, "Flugzeug")}))
+        self.assertTrue(parse.is_excluded({"transportation": transport(10, "Ruftaxi/-bus")}))
+        self.assertFalse(parse.is_excluded({"transportation": transport(7, "Flixbus (Sondertarif)")}))
+        self.assertFalse(parse.is_excluded({}))
 
     def test_tab_names(self):
         self.assertEqual(parse.tab_names([0, 13, 16]), "Trains")
@@ -255,6 +266,23 @@ class ParseDepartureTest(unittest.TestCase):
         self.assertEqual((dep["minutes"], dep["delay"], dep["realtime"]), (5, 3, True))
         self.assertTrue(dep["dticket"])
         self.assertFalse(dep["cancelled"])
+
+    def test_ring_line_does_not_repeat_the_destination(self):
+        # the sign says "Bismarckplatz", but the tram carries on round the ring
+        event = {
+            "location": platform("Bstg. A", stop="Heidelberg, Hauptbahnhof", city="Heidelberg"),
+            "transportation": {**transport(4), "disassembledName": "5", "destination": {"name": "Heidelberg, Bismarckplatz"}},
+            "onwardLocations": [
+                onward("Heidelberg, Stadtwerke", [4]),
+                onward("Heidelberg, Seegarten", [4, 5]),
+                onward("Heidelberg, Bismarckplatz", [4, 5, 6]),
+                onward("Heidelberg, Brückenstraße", [4]),
+                onward("Weinheim, Hauptbahnhof", [0, 4]),
+            ],
+        }
+        dep = parse.parse_departure(event)
+        self.assertEqual(dep["direction"], "Bismarckplatz")
+        self.assertEqual(dep["via"], ["Seegarten"])
 
     def test_cancelled(self):
         event = {"isCancelled": True, "departureTimePlanned": "2026-10-01T08:00:00Z"}
@@ -309,69 +337,152 @@ class GroupingTest(unittest.TestCase):
 
 
 
+def event(cls, line="RE5", planned="2026-10-01T08:00:00Z", estimated=None, gleis="Gleis 3", dest="Ulm"):
+    e = {
+        "location": platform(gleis),
+        "departureTimePlanned": planned,
+        "transportation": {**transport(cls), "disassembledName": line, "destination": {"name": dest}},
+    }
+    if estimated:
+        e["departureTimeEstimated"] = estimated
+    return e
+
+
 class BoardTest(unittest.TestCase):
     """The board with EFA replaced by canned responses (no network)."""
+
+    HBF = "de:08111:6115"
+    TIEF = "de:08111:6118"
 
     def setUp(self):
         from efa import client
         self.client = client
         self.originals = (client.get_station, client.get_departures)
         self.requests = []
+        # station id -> product class -> events; classes missing = no departures
+        self.events = {self.HBF: {13: [event(13)], 5: [event(5, line="42")]}, self.TIEF: {1: [event(1, line="S1")]}}
+        self.stations = {
+            self.HBF: {"locations": [{
+                "id": self.HBF, "name": "Stuttgart, Hauptbahnhof (oben)", "type": "stop",
+                "assignedStops": [
+                    # EFA lists S-Bahn (1) here although none stops
+                    {"id": self.HBF, "name": "x", "productClasses": [0, 1, 5, 13]},
+                    {"id": self.TIEF, "name": "Stuttgart Hauptbahnhof (tief)", "productClasses": [1]},
+                ],
+            }]},
+        }
 
         def get_departures(stop_id, classes=(), limit=100, with_stops=True, ttl=0):
-            self.requests.append((tuple(classes), limit))
-            # this station has trains and buses, but no S-Bahn despite EFA listing it
-            if 1 in classes:
-                return {}
-            cls = 13 if 13 in classes else 5
-            return {"stopEvents": [{
-                "location": platform("Gleis 3"),
-                "departureTimePlanned": "2026-10-01T08:00:00Z",
-                "transportation": {**transport(cls), "disassembledName": "RE5", "destination": {"name": "Ulm"}},
-            }]}
+            self.requests.append((stop_id, tuple(classes), limit))
+            by_class = self.events.get(stop_id, {})
+            found = [e for cls, evs in by_class.items() if not classes or cls in classes for e in evs]
+            return {"stopEvents": found[:limit]} if found else {}
 
-        client.get_station = lambda stop_id: {"locations": [{
-            "id": "de:08111:6115", "name": "Stuttgart, Hauptbahnhof (oben)", "type": "stop",
-            "assignedStops": [
-                {"id": "de:08111:6115", "name": "x", "productClasses": [0, 1, 5, 13]},
-                {"id": "de:08111:6118", "name": "Stuttgart Hauptbahnhof (tief)", "productClasses": [1]},
-            ],
-        }]}
+        client.get_station = lambda stop_id: self.stations.get(stop_id, {})
         client.get_departures = get_departures
 
     def tearDown(self):
         self.client.get_station, self.client.get_departures = self.originals
 
-    def test_empty_tabs_are_dropped_and_first_tab_is_default(self):
+    def board(self, *args):
         from services.departures import board
-        result = board("de:08111:6115")
+        return board(*args)
+
+    def test_empty_tabs_are_dropped_and_first_tab_is_default(self):
+        result = self.board(self.HBF)
         self.assertEqual([t["id"] for t in result["tabs"]], ["trains", "bus"])
         self.assertEqual(result["tab"], "trains")
-        self.assertEqual(result["stop"], {"id": "de:08111:6115", "name": "Stuttgart, Hauptbahnhof (oben)"})
-        self.assertEqual(result["nearby"], [{"id": "de:08111:6118", "name": "Stuttgart Hauptbahnhof (tief)"}])
+        self.assertEqual(result["stop"], {"id": self.HBF, "name": "Stuttgart, Hauptbahnhof (oben)"})
+        self.assertEqual(result["nearby"], [{"id": self.TIEF, "name": "Stuttgart Hauptbahnhof (tief)"}])
         self.assertEqual(result["modes"][0]["name"], "Regional train")
-        # the board itself asked only for the train classes
-        self.assertEqual(self.requests[-1], ((0, 13, 14, 15, 16), 100))
+        self.assertIsNone(result["empty"])
+        # the board itself asked only for the train classes, in full
+        self.assertIn((self.HBF, (0, 13, 14, 15, 16), 100), self.requests)
+        # ...and spent no second request on checking the tab it loaded
+        self.assertNotIn((self.HBF, (0, 13, 14, 15, 16), 1), self.requests)
 
     def test_requested_tab(self):
-        from services.departures import board
-        result = board("de:08111:6115", "bus")
+        result = self.board(self.HBF, "bus")
         self.assertEqual(result["tab"], "bus")
         self.assertEqual(result["modes"][0]["name"], "Bus")
 
+    def test_requested_tab_without_departures_falls_back(self):
+        result = self.board(self.HBF, "sbahn")
+        self.assertEqual(result["tab"], "trains")
+        self.assertEqual(result["modes"][0]["name"], "Regional train")
+
     def test_unknown_stop(self):
-        from services.departures import UnknownStop, board
-        self.client.get_station = lambda stop_id: {}
+        from services.departures import UnknownStop
         with self.assertRaises(UnknownStop):
-            board("nonsense")
+            self.board("nonsense")
 
     def test_stop_outside_baden_wuerttemberg_is_refused(self):
-        from services.departures import UnknownStop, board
-        self.client.get_station = lambda stop_id: {"locations": [{
-            "id": "de:07315:1234", "name": "Mainz, Somewhere", "type": "stop", "assignedStops": [],
-        }]}
+        from services.departures import UnknownStop
+        self.stations["x"] = {"locations": [{"id": "de:07315:1234", "name": "Mainz, Somewhere", "type": "stop"}]}
         with self.assertRaises(UnknownStop):
-            board("nonsense")
+            self.board("x")
+
+    def test_duplicate_trips_are_shown_once(self):
+        # timetable entry + the copy EFA creates from live data
+        self.events[self.HBF][13] = [
+            event(13),
+            event(13, estimated="2026-10-01T08:04:00Z"),
+            event(13, planned="2026-10-01T09:00:00Z"),
+        ]
+        rows = self.board(self.HBF)["modes"][0]["platforms"][0]["departures"]
+        self.assertEqual([(r["planned"], r["realtime"]) for r in rows],
+                         [("2026-10-01T08:00:00Z", True), ("2026-10-01T09:00:00Z", False)])
+
+    def test_same_time_on_another_platform_is_not_a_duplicate(self):
+        self.events[self.HBF][13] = [event(13), event(13, gleis="Gleis 4")]
+        platforms = self.board(self.HBF)["modes"][0]["platforms"]
+        self.assertEqual([p["name"] for p in platforms], ["Platform 3", "Platform 4"])
+
+    def test_flights_and_on_demand_never_show(self):
+        self.stations[self.HBF]["locations"][0]["assignedStops"][0]["productClasses"] = [5, 10, 12]
+        self.events[self.HBF] = {5: [event(5, line="42")], 10: [event(10, line="RT6")], 12: [event(12, line="DE 1532")]}
+        result = self.board(self.HBF)
+        self.assertEqual([t["id"] for t in result["tabs"]], ["bus"])
+        lines = [r["line"] for m in result["modes"] for p in m["platforms"] for r in p["departures"]]
+        self.assertEqual(lines, ["42"])
+
+    def test_unreadable_departure_is_skipped_not_fatal(self):
+        broken = event(13, line="RE1")
+        broken["transportation"] = "not an object"
+        worse = event(13, line="RE2")
+        worse["departureTimePlanned"] = 12345
+        timeless = event(13, line="RE3")
+        del timeless["departureTimePlanned"]
+        self.events[self.HBF][13] = [broken, event(13), worse, "junk", None, {}, timeless]
+        with self.assertLogs("services.departures", level="WARNING"):
+            result = self.board(self.HBF)
+        lines = [r["line"] for m in result["modes"] for p in m["platforms"] for r in p["departures"]]
+        self.assertEqual(lines, ["RE5"])
+
+    def test_empty_station_points_to_nearby_service(self):
+        # like Waldshut Bahnhof: nothing here, replacement buses next door
+        self.events[self.HBF] = {}
+        result = self.board(self.HBF)
+        self.assertEqual(result["empty"], "nearby")
+        self.assertEqual(result["modes"], [])
+        self.assertEqual(result["tabs"], [])
+        self.assertEqual(result["nearby"], [{"id": self.TIEF, "name": "Stuttgart Hauptbahnhof (tief)", "types": ["S-Bahn"]}])
+
+    def test_empty_station_without_any_service(self):
+        # like Ehingen: the timetable has nothing, here or nearby
+        self.events = {}
+        result = self.board(self.HBF)
+        self.assertEqual(result["empty"], "no_service")
+        self.assertEqual(result["nearby"], [])
+
+
+class SearchTest(unittest.TestCase):
+    def test_unreadable_match_is_skipped(self):
+        from services.stops import parse_points
+        good = StopSearchTest.POINT
+        with self.assertLogs("services.stops", level="WARNING"):
+            stops = parse_points([good, {"anyType": "stop", "ref": "not an object"}, {"anyType": "street"}])
+        self.assertEqual([s["id"] for s in stops], ["de:08311:6508"])
 
 
 if __name__ == "__main__":
