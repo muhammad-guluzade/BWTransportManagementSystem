@@ -3,27 +3,51 @@ Probe the EFA APIs and report what data they actually give us.
 
 For each sample station it checks, per endpoint:
   - stop search: is the stop found, what is its global id (gid), coordinates?
-  - departures (classic JSON, what app.py uses): how many, which platform
+  - departures (classic JSON, the older format): how many, which platform
     fields are filled, which transport modes appear.
-  - departures (rapidJSON): per-platform ids/coordinates and the next stops
-    of each trip (needed to label a platform's direction, e.g. "towards
-    Hauptbahnhof").
+  - departures (rapidJSON, what the app uses): per-platform ids/coordinates
+    and the next stops of each trip.
+
+--survey runs the app's own normalisation rules (efa/parse.py) over many
+stations, to judge them on real data.
 
 This is an unofficial API, so field names can change -- run this whenever
-something in app.py misbehaves, before changing code.
+something in the app misbehaves, before changing code.
 
 Usage:
     python debug_efa.py                      # all sample stations, both endpoints
     python debug_efa.py "Stuttgart Pragfriedhof"
     python debug_efa.py --endpoint bw        # only the statewide endpoint
     python debug_efa.py --dump               # also save raw JSON to debug_output/
+    python debug_efa.py --structure          # how stations across BW are built:
+                                             # linked stations, zones, modes
+    python debug_efa.py --survey             # try out the normalisation rules
+                                             # (modes, platforms, D-Ticket,
+                                             # via stops) on many stations
 """
 import argparse
 import json
-from collections import Counter
+import re
+import time
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import requests
+
+from efa.parse import (
+    SPECIAL_FARE_ATTRS,
+    as_list,
+    dticket_valid,
+    extract_points,
+    line_name,
+    locality,
+    mode_group,
+    platform_label,
+    short_name,
+    transport_attrs,
+    via_stops,
+)
 
 ENDPOINTS = {
     "bw": "https://www.efa-bw.de/nvbw/",
@@ -47,13 +71,6 @@ SAMPLE_STATIONS = [
 PLATFORM_KEYS = ("platform", "platformName", "pointType", "stopName", "nameWO")
 
 DUMP_DIR = Path(__file__).parent / "debug_output"
-
-
-def as_list(value) -> list:
-    """EFA returns a bare dict instead of a list when there is one item."""
-    if value is None:
-        return []
-    return value if isinstance(value, list) else [value]
 
 
 def efa_get(base: str, endpoint: str, params: dict) -> dict:
@@ -93,7 +110,7 @@ def departures(base: str, stop_id: str) -> dict:
     )
 
 
-def departures_rapid(base: str, stop_id: str) -> dict:
+def departures_rapid(base: str, stop_id: str, when: datetime | None = None, limit: int = 40, **extra) -> dict:
     """Same request in rapidJSON format. Unlike classic JSON (where
     onwardStopSeq comes back as an empty placeholder), this fills in the
     onward stops of each trip -- what we need to label a platform's
@@ -104,23 +121,22 @@ def departures_rapid(base: str, stop_id: str) -> dict:
         "name_dm": stop_id,
         "mode": "direct",
         "useRealtime": 1,
-        "limit": 40,
+        "limit": limit,
         "depType": "stopEvents",
         "includeCompleteStopSeq": 1,
         "coordOutputFormat": "WGS84[dd.ddddd]",
     }
-    r = requests.get(base + "XML_DM_REQUEST", params=params, headers=HEADERS, timeout=15)
+    if when:
+        # ask for departures at a fixed time instead of "now" (e.g. a
+        # weekday morning, so a night-time run isn't all night buses)
+        params.update(
+            {"itdDate": when.strftime("%Y%m%d"), "itdTime": when.strftime("%H%M"), "itdTripDateTimeDepArr": "dep"}
+        )
+    params.update(extra)
+    r = requests.get(base + "XML_DM_REQUEST", params=params, headers=HEADERS, timeout=30)
     r.raise_for_status()
     r.encoding = "utf-8"
     return r.json()
-
-
-def extract_points(sf: dict) -> list:
-    points = sf.get("stopFinder", {}).get("points")
-    # single match: {"point": {...}}; multiple matches: [{...}, {...}]
-    if isinstance(points, dict):
-        points = points.get("point", points)
-    return as_list(points)
 
 
 def dump(name: str, data: dict) -> None:
@@ -237,12 +253,303 @@ def probe(endpoint_name: str, query: str, do_dump: bool) -> None:
         dump(f"{endpoint_name}_{query}_departures_rapid", rj)
 
 
+# ---------------------------------------------------------------------------
+# Survey: run the app's normalisation rules (efa/parse.py) over many stations
+# so we can judge them on real data.
+# ---------------------------------------------------------------------------
+
+SURVEY_STATIONS = SAMPLE_STATIONS + [
+    "Stuttgart Schlossplatz",
+    "Stuttgart Marienplatz",
+    "Stuttgart Flughafen/Messe",
+    "Mannheim Hauptbahnhof",
+    "Mannheim Paradeplatz",
+    "Karlsruhe Marktplatz",
+    "Heidelberg Hauptbahnhof",
+    "Heilbronn Hauptbahnhof",
+    "Pforzheim Hauptbahnhof",
+    "Tübingen Hauptbahnhof",
+    "Reutlingen Hauptbahnhof",
+    "Konstanz Bahnhof",
+    "Friedrichshafen Stadtbahnhof",
+    "Meersburg Fähre",
+    "Offenburg Bahnhof",
+    "Villingen Bahnhof",
+    "Aalen Hauptbahnhof",
+    "Titisee Bahnhof",
+]
+
+def next_weekday_morning() -> datetime:
+    day = datetime.now() + timedelta(days=1)
+    while day.weekday() >= 5:
+        day += timedelta(days=1)
+    return day.replace(hour=8, minute=0, second=0, microsecond=0)
+
+
+def survey(stations: list) -> None:
+    base = ENDPOINTS["bw"]
+    when = next_weekday_morning()
+    print(f"Survey of {len(stations)} stations, departures from {when:%a %Y-%m-%d %H:%M}\n")
+
+    modes = defaultdict(lambda: {"n": 0, "examples": []})       # (class, name, group) -> ...
+    fares = defaultdict(lambda: {"n": 0, "examples": []})       # (verdict, group, type, attrs) -> ...
+    platforms = defaultdict(lambda: {"n": 0, "examples": []})   # raw pattern -> ...
+    labels = []                                                 # (station, group, platform, rows)
+    total = 0
+
+    for query in stations:
+        try:
+            stops = [p for p in extract_points(stopfinder(base, query)) if p.get("anyType") == "stop"]
+            if not stops:
+                print(f"  {query}: no stop found")
+                continue
+            gid = (stops[0].get("ref") or {}).get("gid") or stops[0].get("stateless")
+            events = departures_rapid(base, gid, when=when, limit=80).get("stopEvents") or []
+        except (requests.RequestException, ValueError) as e:
+            print(f"  {query}: FAILED {e}")
+            continue
+        print(f"  {stops[0].get('name')}: {len(events)} departures")
+        total += len(events)
+        time.sleep(0.3)  # be polite to the API
+
+        per_platform = defaultdict(list)
+        for e in events:
+            t = e.get("transportation") or {}
+            product = t.get("product") or {}
+            tprops = t.get("properties") or {}
+            line = t.get("disassembledName") or tprops.get("trainType") or t.get("name") or "?"
+            group = mode_group(t)
+
+            m = modes[(product.get("class"), product.get("name"), group)]
+            m["n"] += 1
+            if line not in m["examples"] and len(m["examples"]) < 4:
+                m["examples"].append(line)
+
+            verdict = {True: "VALID", False: "not valid", None: "unsure (no label)"}[dticket_valid(t)]
+            attrs = ", ".join(sorted(transport_attrs(t) & SPECIAL_FARE_ATTRS)) or "-"
+            f = fares[(verdict, group, tprops.get("trainType") or "-", attrs)]
+            f["n"] += 1
+            if line not in f["examples"] and len(f["examples"]) < 4:
+                f["examples"].append(line)
+
+            loc = e.get("location") or {}
+            lprops = loc.get("properties") or {}
+            raw = (lprops.get("platformName") or lprops.get("platform") or "").strip()
+            pattern = re.sub(r"\d+", "N", raw) if raw else "(empty)"
+            pl = platforms[pattern]
+            pl["n"] += 1
+            example = f"'{raw}' -> '{platform_label(loc)}'"
+            if example not in pl["examples"] and len(pl["examples"]) < 3:
+                pl["examples"].append(example)
+
+            # a platform is identified by its own id, not its label: a tram
+            # "Gleis 1" and a bus "Pos. 1" at one stop are different places
+            per_platform[(group, platform_label(loc), loc.get("id"))].append(e)
+
+        for (group, label, _), evs in sorted(per_platform.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+            # one row per distinct line + destination + via on this platform
+            rows = Counter()
+            for x in evs:
+                t = x.get("transportation") or {}
+                line = line_name(t)
+                dest = short_name((t.get("destination") or {}).get("name") or "?", locality(x.get("location") or {}))
+                rows[(line, dest, " · ".join(via_stops(x)))] += 1
+            labels.append((stops[0].get("name"), group, label, rows))
+
+    print(f"\n{total} departures in total")
+
+    print("\n\n=== 1. TRANSPORT MODES: what EFA sends -> our group ===")
+    print(f"{'class':>5}  {'EFA name':<28} {'our group':<22} {'count':>5}  examples")
+    for (cls, name, group), v in sorted(modes.items(), key=lambda kv: (kv[0][2], str(kv[0][0]))):
+        print(f"{str(cls):>5}  {str(name):<28} {group:<22} {v['n']:>5}  {', '.join(v['examples'])}")
+
+    print("\n\n=== 2. PLATFORM LABELS: raw format (N = number) -> normalised ===")
+    print(f"{'raw pattern':<16} {'count':>5}  examples")
+    for pattern, v in sorted(platforms.items(), key=lambda kv: -kv[1]["n"]):
+        print(f"{pattern:<16} {v['n']:>5}  {'; '.join(v['examples'])}")
+
+    print("\n\n=== 3. DEUTSCHLANDTICKET: rule result per kind of service ===")
+    print(f"{'verdict':<18} {'group':<20} {'type':<6} {'count':>5}  {'fare attributes':<52} examples")
+    for (verdict, group, ttype, attrs), v in sorted(fares.items()):
+        print(f"{verdict:<18} {group:<20} {ttype:<6} {v['n']:>5}  {attrs:<52} {', '.join(v['examples'])}")
+
+    print("\n\n=== 4. VIA STOPS per departure (line -> destination, via major stops) ===")
+    current = None
+    with_via = without_via = 0
+    for station, group, label, rows in labels:
+        if station != current:
+            print(f"\n{station}")
+            current = station
+        print(f"  {group} / {label}")
+        for (line, dest, via), n in sorted(rows.items()):
+            print(f"      {line:<7} -> {dest:<38} {('via ' + via) if via else '(no via)':<60} x{n}")
+            with_via += n if via else 0
+            without_via += 0 if via else n
+
+    print(f"\n{with_via} departures with via stops, {without_via} without")
+
+
+# ---------------------------------------------------------------------------
+# Structure survey: how are stations across BW built? Some hubs are several
+# linked stations (Stuttgart Hbf oben / tief / Arnulf-Klett-Platz), some are
+# one station covering every mode (Freiburg Hbf), most are simple stops.
+# ---------------------------------------------------------------------------
+
+STRUCTURE_STATIONS = [
+    # Stuttgart region
+    "Stuttgart Hauptbahnhof", "Stuttgart Bad Cannstatt", "Stuttgart Vaihingen", "Stuttgart Feuerbach",
+    "Stuttgart Charlottenplatz", "Stuttgart Rotebühlplatz", "Stuttgart Flughafen/Messe", "Stuttgart Degerloch",
+    "Stuttgart Pragfriedhof", "Esslingen Bahnhof", "Ludwigsburg Bahnhof", "Böblingen Bahnhof",
+    "Sindelfingen ZOB", "Waiblingen Bahnhof", "Göppingen Bahnhof", "Plochingen Bahnhof", "Herrenberg Bahnhof",
+    "Backnang Bahnhof", "Bietigheim-Bissingen Bahnhof", "Leonberg Bahnhof",
+    # Karlsruhe / Rhine-Neckar
+    "Karlsruhe Hauptbahnhof", "Karlsruhe Marktplatz", "Karlsruhe Europaplatz", "Karlsruhe Durlach Bahnhof",
+    "Mannheim Hauptbahnhof", "Mannheim Paradeplatz", "Heidelberg Hauptbahnhof", "Heidelberg Bismarckplatz",
+    "Pforzheim Hauptbahnhof", "Bruchsal Bahnhof", "Rastatt Bahnhof", "Baden-Baden Bahnhof", "Weinheim Hauptbahnhof",
+    "Mosbach Bahnhof", "Sinsheim Hauptbahnhof",
+    # South / Black Forest / Lake Constance
+    "Freiburg Hauptbahnhof", "Freiburg Bertoldsbrunnen", "Offenburg Bahnhof", "Lörrach Hauptbahnhof",
+    "Emmendingen Bahnhof", "Kehl Bahnhof", "Villingen Bahnhof", "Schwenningen Bahnhof", "Titisee Bahnhof",
+    "Freudenstadt Hauptbahnhof", "Rottweil Bahnhof", "Tuttlingen Bahnhof", "Singen Bahnhof", "Radolfzell Bahnhof",
+    "Konstanz Bahnhof", "Friedrichshafen Stadtbahnhof", "Ravensburg Bahnhof", "Meersburg Fähre",
+    # East / North
+    "Ulm Hauptbahnhof", "Biberach Bahnhof", "Sigmaringen Bahnhof", "Reutlingen Hauptbahnhof", "Tübingen Hauptbahnhof",
+    "Aalen Hauptbahnhof", "Schwäbisch Gmünd Bahnhof", "Heidenheim Bahnhof", "Heilbronn Hauptbahnhof",
+    "Heilbronn Harmonie", "Schwäbisch Hall Bahnhof", "Crailsheim Bahnhof", "Öhringen Hauptbahnhof",
+    "Bad Mergentheim Bahnhof", "Wertheim Bahnhof",
+    # small stops
+    "Schluchsee Rathaus", "Feldberg Bärental Bahnhof",
+]
+
+# mode group -> tab the station page would offer
+TAB_OF = {
+    "Regional train": "Trains",
+    "Long-distance train": "Trains",
+    "S-Bahn": "S-Bahn",
+    "U-Bahn / Tram": "U-Bahn / Tram",
+    "Bus": "Bus",
+    "Long-distance bus": "Bus",
+    "On-demand": "Bus",
+}
+
+
+def structure(stations: list) -> None:
+    base = ENDPOINTS["bw"]
+    when = next_weekday_morning()
+    print(f"Structure of {len(stations)} stations, departures from {when:%a %Y-%m-%d %H:%M}\n")
+
+    rows = []
+    notes = []
+    for query in stations:
+        try:
+            found = [p for p in extract_points(stopfinder(base, query)) if p.get("anyType") == "stop"]
+            found = [p for p in found if ((p.get("ref") or {}).get("gid") or "").startswith("de:08")]
+            if not found:
+                notes.append(f"{query}: no stop found in BW")
+                continue
+            stop = found[0]
+            gid = stop["ref"]["gid"]
+            linked_events = departures_rapid(base, gid, when=when, limit=100).get("stopEvents") or []
+            own_events = departures_rapid(base, gid, when=when, limit=100, deleteAssignedStops_dm=1).get("stopEvents") or []
+        except (requests.RequestException, ValueError, KeyError) as e:
+            notes.append(f"{query}: FAILED {e}")
+            continue
+        time.sleep(0.3)  # be polite to the API
+
+        def station_of(e):
+            parent = (e.get("location") or {}).get("parent") or {}
+            return parent.get("id"), parent.get("name")
+
+        # other stations whose departures EFA mixes in by default
+        linked = sorted({name or "?" for sid, name in map(station_of, linked_events) if sid != gid})
+        foreign = [e for e in own_events if station_of(e)[0] != gid]
+
+        zones = defaultdict(lambda: {"modes": Counter(), "platforms": set()})
+        modes = Counter()
+        labels = defaultdict(set)  # (mode, platform label) -> zones using it
+        unknown = 0
+        for e in own_events:
+            loc = e.get("location") or {}
+            area = (loc.get("properties") or {}).get("area")
+            group = mode_group(e.get("transportation") or {})
+            label = platform_label(loc)
+            zones[area]["modes"][group] += 1
+            zones[area]["platforms"].add(label)
+            modes[group] += 1
+            labels[(group, label)].add(area)
+            unknown += label == "Unknown platform"
+
+        tabs = sorted({TAB_OF.get(m, m) for m in modes})
+        mixed = [a for a, z in zones.items() if len({TAB_OF.get(m, m) for m in z["modes"]}) > 1]
+        clashes = [f"{m} {l}" for (m, l), areas in labels.items() if len(areas) > 1 and l != "Unknown platform"]
+        top_share = max(modes.values()) / len(own_events) if own_events else 0
+
+        if linked:
+            kind = "linked hub"
+        elif len(tabs) >= 3:
+            kind = "single hub"
+        elif len(tabs) == 2:
+            kind = "two modes"
+        else:
+            kind = "simple"
+
+        rows.append({
+            "name": stop.get("name"), "kind": kind, "linked": linked, "tabs": tabs, "zones": len(zones),
+            "mixed": len(mixed), "clashes": clashes, "unknown": unknown, "n": len(own_events),
+            "top": f"{modes.most_common(1)[0][0]} {top_share:.0%}" if modes else "-",
+            "others": [p.get("name") for p in found[1:4]],
+        })
+        if foreign:
+            notes.append(f"{stop.get('name')}: {len(foreign)} departures from another station even with linking off")
+        if not own_events:
+            notes.append(f"{stop.get('name')}: no departures of its own (linked: {linked})")
+        print(f"  {stop.get('name')}: {kind}")
+
+    print("\n\n=== STATIONS ===")
+    print(f"{'station':<40} {'kind':<11} {'deps':>4} {'zones':>5} {'mixed':>5} {'unkn':>4}  {'tabs':<38} biggest share")
+    for r in rows:
+        print(f"{r['name'][:39]:<40} {r['kind']:<11} {r['n']:>4} {r['zones']:>5} {r['mixed']:>5} {r['unknown']:>4}  "
+              f"{', '.join(r['tabs'])[:37]:<38} {r['top']}")
+
+    print("\n\n=== SUMMARY ===")
+    for kind, n in Counter(r["kind"] for r in rows).most_common():
+        print(f"  {kind:<11} {n}")
+
+    print("\n\n=== LINKED HUBS: stations EFA mixes in by default ===")
+    for r in rows:
+        if r["linked"]:
+            print(f"  {r['name']}\n      linked: {', '.join(r['linked'])}\n      own tabs: {', '.join(r['tabs']) or '-'}")
+
+    print("\n\n=== SAME PLATFORM LABEL IN DIFFERENT ZONES (same mode) ===")
+    for r in rows:
+        if r["clashes"]:
+            print(f"  {r['name']}: {', '.join(r['clashes'][:8])}")
+
+    print("\n\n=== OTHER SEARCH RESULTS FOR THE SAME QUERY ===")
+    for r in rows:
+        if r["others"]:
+            print(f"  {r['name']}: {'; '.join(r['others'])}")
+
+    print("\n\n=== NOTES ===")
+    for note in notes:
+        print(f"  {note}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("stations", nargs="*", help="station names to probe (default: built-in samples)")
     parser.add_argument("--endpoint", choices=[*ENDPOINTS, "all"], default="all")
     parser.add_argument("--dump", action="store_true", help="save raw JSON responses to debug_output/")
+    parser.add_argument("--survey", action="store_true", help="try the normalisation rules on many stations")
+    parser.add_argument("--structure", action="store_true", help="how stations across BW are built")
     args = parser.parse_args()
+
+    if args.structure:
+        structure(args.stations or STRUCTURE_STATIONS)
+        return
+    if args.survey:
+        survey(args.stations or SURVEY_STATIONS)
+        return
 
     stations = args.stations or SAMPLE_STATIONS
     endpoints = list(ENDPOINTS) if args.endpoint == "all" else [args.endpoint]

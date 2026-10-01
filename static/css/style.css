@@ -1,0 +1,45 @@
+body { font-family: system-ui, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 16px; color: #222; }
+h1 { font-size: 1.4rem; }
+#search-box { position: relative; }
+input[type=text] { width: 100%; padding: 10px; font-size: 1rem; box-sizing: border-box; border: 1px solid #aaa; border-radius: 4px; }
+#results { position: absolute; background: white; border: 1px solid #ccc; width: 100%; z-index: 10; max-height: 220px; overflow-y: auto; box-sizing: border-box; }
+#results div { padding: 8px 10px; cursor: pointer; }
+#results div:hover { background: #eef; }
+#status { color: #777; margin-top: 10px; font-size: 0.9rem; }
+
+/* station header: name, nearby stations, transport-type tabs */
+.station-name { font-size: 1.2rem; margin: 22px 0 4px; }
+.nearby { color: #666; font-size: 0.9rem; }
+.nearby a { color: #005aa9; }
+.tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.tab { padding: 7px 14px; font: inherit; border: 1px solid #aaa; border-radius: 18px; background: white; color: #333; cursor: pointer; }
+.tab:hover { background: #eef; }
+.tab.active { background: #333; border-color: #333; color: white; }
+
+/* departure board */
+.platform-block { margin-top: 10px; border: 1px solid #ddd; border-radius: 6px; overflow: hidden; }
+.platform-title { font-weight: bold; background: #333; color: white; padding: 8px 12px; }
+.mode-section { margin-top: 28px; }
+.mode-section:first-of-type { margin-top: 20px; }
+.mode-header { font-size: 1.05rem; font-weight: bold; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 3px solid #999; color: #333; }
+.mode-header.mode-u-bahn-tram { border-color: #005aa9; color: #005aa9; }
+.mode-header.mode-s-bahn { border-color: #2e8b47; color: #2e8b47; }
+.mode-header.mode-bus { border-color: #a1338f; color: #a1338f; }
+.mode-header.mode-regional-train,
+.mode-header.mode-long-distance-train { border-color: #c1121c; color: #c1121c; }
+table { width: 100%; border-collapse: collapse; }
+td { padding: 8px 12px; border-bottom: 1px solid #eee; vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+.line-cell { width: 1%; }
+.line-badge { display: inline-block; min-width: 30px; padding: 3px 6px; background: #005aa9; color: white; border-radius: 4px; font-weight: bold; text-align: center; font-size: 0.9rem; white-space: nowrap; }
+.direction { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.dticket { padding: 1px 7px; border: 1px solid #2e8b47; border-radius: 10px; color: #2e8b47; font-size: 0.72rem; font-weight: bold; white-space: nowrap; }
+.via { color: #777; font-size: 0.85rem; margin-top: 2px; }
+.time { white-space: nowrap; text-align: right; }
+.time s { color: #999; }
+.late { color: #c1121c; font-weight: bold; }
+.minutes { color: #666; text-align: right; white-space: nowrap; width: 1%; }
+tr.cancelled .destination, tr.cancelled .via { text-decoration: line-through; color: #999; }
+tr.cancelled .line-badge { background: #999; }
+.show-more { display: block; width: 100%; padding: 8px; font: inherit; font-size: 0.9rem; border: none; border-top: 1px solid #eee; background: #f7f7f7; color: #005aa9; cursor: pointer; }
+.show-more:hover { background: #eef; }
