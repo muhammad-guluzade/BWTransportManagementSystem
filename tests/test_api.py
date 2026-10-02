@@ -183,6 +183,18 @@ class ErrorTest(ApiTestCase):
         self.assert_error(self.http.get("/api/departures?stop_id=x"), 404, "not_found")  # the pre-v1 address
         self.assert_error(self.http.post("/api/v1/stops/search"), 405, "method_not_allowed")
 
+    def test_main_page_has_map_and_panel(self):
+        page = self.http.get("/").get_data(as_text=True)
+        for part in ('id="map"', 'id="panel"', 'id="stop-input"', 'id="credits"', "js/departures.js", "js/map.js"):
+            self.assertIn(part, page)
+        # the scripts and the stylesheet the page asks for exist
+        for asset in ("/static/js/departures.js", "/static/js/map.js", "/static/css/style.css"):
+            with self.http.get(asset) as res:
+                self.assertEqual(res.status_code, 200, asset)
+
+    def test_the_separate_map_page_is_gone(self):
+        self.assertEqual(self.http.get("/map").status_code, 404)
+
     def test_pages_are_not_affected(self):
         self.assertEqual(self.http.get("/").status_code, 200)
         missing = self.http.get("/nothing")

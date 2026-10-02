@@ -27,13 +27,14 @@ def data_info() -> dict | None:
         return None
 
 
-def in_area(bbox: str, limit: str = "") -> dict:
-    """The most important stations inside a rectangle, most important
-    first: {stops: [{id, name, lat, lon, lines, kinds}], total, limit}.
+def in_area(bbox: str, limit: str = "", spread: str = "") -> dict:
+    """Stations inside a rectangle, most important first:
+    {stops: [{id, name, lat, lon, lines, kinds}], total, limit}.
 
-    `bbox` is "west,south,east,north" in degrees. Asking for the top few
-    stations of whatever a map currently shows gives the main stations
-    when zoomed out and every stop when zoomed in."""
+    `bbox` is "west,south,east,north" in degrees. Asking for the stations
+    of whatever a map currently shows gives the main stations when zoomed
+    out and every stop when zoomed in. `spread` ("1"/"true") picks them
+    evenly across the rectangle instead of strictly by importance."""
     try:
         west, south, east, north = (float(part) for part in bbox.split(","))
     except ValueError:
@@ -46,7 +47,7 @@ def in_area(bbox: str, limit: str = "") -> dict:
         raise InvalidArea("limit must be a whole number") from None
     count = max(1, min(count, AREA_MAX_LIMIT))
 
-    stops, total = store.in_area(west, south, east, north, count)
+    stops, total = store.in_area(west, south, east, north, count, spread.lower() in ("1", "true", "yes"))
     return {"stops": stops, "total": total, "limit": count}
 
 

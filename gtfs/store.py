@@ -1,4 +1,5 @@
 """Read the stop database built by gtfs/importer.py (`python import_stops.py`)."""
+import math
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
@@ -8,6 +9,10 @@ DB_PATH = Path(__file__).parent.parent / "data" / "stops.sqlite"
 KIND_COLUMNS = (("rail", "rail_lines"), ("urban_rail", "urban_lines"), ("bus", "bus_lines"), ("other", "other_lines"))
 
 SOURCE_PAGE = "https://www.nvbw.de/open-data"
+
+# In Baden-Württemberg one degree of longitude is about two thirds as long
+# as one degree of latitude; grid cells this much flatter come out square.
+LAT_PER_LON = 0.66
 
 
 class StopsNotImported(Exception):
@@ -47,13 +52,40 @@ def to_stop(row: sqlite3.Row) -> dict:
     }
 
 
-def in_area(west: float, south: float, east: float, north: float, limit: int) -> tuple:
-    """(stops, total): the `limit` most important stations inside the
-    rectangle, most important first, and how many there are in all."""
+def grid_cell(west: float, east: float, south: float, north: float, limit: int) -> float:
+    """Width in degrees of longitude of the grid cells that spread about
+    `limit` stations over the rectangle.
+
+    The width is rounded to a power of two and the grid is anchored to the
+    globe, not to the rectangle: moving the rectangle a little (panning a
+    map) then keeps the same cells, and so the same stations."""
+    cells_across = math.sqrt(limit * (east - west) * LAT_PER_LON / (north - south))
+    return 2.0 ** round(math.log2((east - west) / max(cells_across, 1)))
+
+
+def in_area(west: float, south: float, east: float, north: float, limit: int, spread: bool = False) -> tuple:
+    """(stops, total): up to `limit` stations inside the rectangle, most
+    important first, and how many there are in all.
+
+    Normally these are simply the most important ones. With `spread`, and
+    more stations than fit, the rectangle is divided into a grid and the
+    most important station of each cell is taken: on a map that covers every
+    region, where the plain top list would crowd into the big cities."""
     where = "lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?"
     box = (south, north, west, east)
     total = query(f"SELECT COUNT(*) FROM stations WHERE {where}", box)[0][0]
-    rows = query(f"SELECT * FROM stations WHERE {where} ORDER BY importance DESC, id LIMIT ?", (*box, limit))
+    if spread and total > limit:
+        width = grid_cell(west, east, south, north, limit)
+        rows = query(
+            f"""SELECT * FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY CAST(lon / ? AS INTEGER), CAST(lat / ? AS INTEGER)
+                        ORDER BY importance DESC, id) AS place_in_cell
+                    FROM stations WHERE {where})
+                WHERE place_in_cell = 1 ORDER BY importance DESC, id LIMIT ?""",
+            (width, width * LAT_PER_LON, *box, limit))
+    else:
+        rows = query(f"SELECT * FROM stations WHERE {where} ORDER BY importance DESC, id LIMIT ?", (*box, limit))
     return [to_stop(row) for row in rows], total
 
 

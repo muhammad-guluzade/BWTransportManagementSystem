@@ -6,6 +6,7 @@ A tiny GTFS file is built in a temporary folder, shaped like NVBW's real
 one, so the tests need neither the 55 MB download nor the network."""
 import csv
 import io
+import math
 import sqlite3
 import sys
 import tempfile
@@ -605,6 +606,55 @@ class AreaTest(StopsDbTestCase):
         self.assertEqual(store.in_area(0, 0, 1, 1, 10), ([], 0))
 
 
+class SpreadTest(StopsDbTestCase):
+    """Picking stations evenly across a map instead of strictly by importance."""
+
+    STUTTGART = (9.0, 48.7, 9.3, 48.9)   # three stations, all in the city
+    WIDE = (7.5, 47.5, 10.5, 49.8)       # the whole state: six stations
+
+    def test_plain_top_list_crowds_into_the_city(self):
+        stops, total = store.in_area(*self.WIDE, 3)
+        self.assertEqual(total, len(SERVED))
+        self.assertEqual({s["id"] for s in stops}, {"de:08111:6115", "de:08111:6113", "de:08111:6114"})
+
+    def test_spread_takes_the_best_station_of_each_region(self):
+        stops, total = store.in_area(*self.WIDE, 3, spread=True)
+        self.assertEqual(total, len(SERVED))
+        ids = [s["id"] for s in stops]
+        # one for Stuttgart (its most important station), then other regions
+        self.assertEqual(ids[0], "de:08111:6115")
+        self.assertNotIn("de:08111:6113", ids)
+        self.assertNotIn("de:08111:6114", ids)
+        self.assertEqual(len(ids), 3)
+
+    def test_spread_keeps_importance_order(self):
+        stops, _ = store.in_area(*self.WIDE, 3, spread=True)
+        scores = [self.stations()[s["id"]]["importance"] for s in stops]
+        self.assertEqual(scores, sorted(scores, reverse=True))
+
+    def test_everything_is_returned_once_it_fits(self):
+        # zoomed in far enough, spreading must not hide stops
+        plain, _ = store.in_area(*self.STUTTGART, 10)
+        spread, _ = store.in_area(*self.STUTTGART, 10, spread=True)
+        self.assertEqual(spread, plain)
+        self.assertEqual(len(spread), 3)
+
+    def test_never_more_than_the_limit(self):
+        for limit in (1, 2, 4):
+            stops, _ = store.in_area(*self.WIDE, limit, spread=True)
+            self.assertLessEqual(len(stops), limit)
+            self.assertGreaterEqual(len(stops), 1)
+
+    def test_grid_does_not_move_with_the_map(self):
+        # a power of two, whatever the exact rectangle: panning keeps the cells
+        cell = store.grid_cell(9.00, 9.60, 48.60, 48.95, 150)
+        self.assertEqual(cell, store.grid_cell(9.03, 9.63, 48.62, 48.97, 150))
+        self.assertEqual(math.log2(cell) % 1, 0)
+        # zooming out makes the cells bigger, zooming in smaller
+        self.assertGreater(store.grid_cell(7.5, 10.5, 47.5, 49.8, 150), cell)
+        self.assertLess(store.grid_cell(9.17, 9.20, 48.79, 48.81, 150), cell)
+
+
 class AreaApiTest(StopsDbTestCase):
     def setUp(self):
         super().setUp()
@@ -632,6 +682,20 @@ class AreaApiTest(StopsDbTestCase):
             res = self.http.get("/api/v1/stops" + query)
             self.assertEqual(res.status_code, 400, query)
             self.assertEqual(res.get_json()["error"]["code"], "invalid_parameter", query)
+
+    def test_spread_parameter(self):
+        whole_state = "/api/v1/stops?bbox=7.5,47.5,10.5,49.8&limit=3"
+        plain = [s["id"] for s in self.http.get(whole_state).get_json()["stops"]]
+        self.assertEqual(set(plain), {"de:08111:6115", "de:08111:6113", "de:08111:6114"})
+        for value in ("1", "true"):
+            body = self.http.get(f"{whole_state}&spread={value}").get_json()
+            ids = [s["id"] for s in body["stops"]]
+            self.assertEqual(list(body), ["stops", "total", "limit"])   # same shape as without
+            self.assertEqual((ids[0], body["total"]), ("de:08111:6115", len(SERVED)))
+            self.assertNotIn("de:08111:6113", ids)
+        for value in ("0", "", "no"):
+            ids = [s["id"] for s in self.http.get(f"{whole_state}&spread={value}").get_json()["stops"]]
+            self.assertEqual(ids, plain)
 
     def test_index_says_where_the_stop_data_comes_from(self):
         data = self.http.get("/api/v1/").get_json()["stop_data"]

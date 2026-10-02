@@ -3,23 +3,44 @@
 <head>
 <meta charset="UTF-8">
 <title>BW Departures</title>
+<!-- Leaflet draws the map (its stylesheet is required for it to render correctly) -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
 
-<h1>Baden-Württemberg Departures</h1>
+<header>
+  <h1>Baden-Württemberg Departures</h1>
+  <div id="search-box">
+    <input type="text" id="stop-input" placeholder="Search a stop, e.g. Pragfriedhof" autocomplete="off">
+    <div id="results"></div>
+  </div>
+</header>
 
-<div id="search-box">
-  <input type="text" id="stop-input" placeholder="Search a stop, e.g. Pragfriedhof" autocomplete="off">
-  <div id="results"></div>
-</div>
+<main>
+  <section id="map-area">
+    <div id="map"></div>
+    <div id="map-note" hidden></div>
+    <div id="legend">
+      <span><i class="dot kind-rail"></i>Rail</span>
+      <span><i class="dot kind-urban_rail"></i>S-Bahn, U-Bahn, tram</span>
+      <span><i class="dot kind-bus"></i>Bus</span>
+    </div>
+  </section>
 
-<div id="station"></div>
-<div id="status"></div>
-<div id="board"></div>
-<div id="raw"></div>
+  <section id="panel">
+    <div id="station"></div>
+    <div id="status">Search for a stop, or click one on the map, to see its departures.</div>
+    <div id="board"></div>
+    <div id="raw"></div>
+  </section>
+</main>
 
+<footer id="credits"></footer>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="{{ url_for('static', filename='js/departures.js') }}"></script>
+<script src="{{ url_for('static', filename='js/map.js') }}"></script>
 
 </body>
 </html>

@@ -1,11 +1,30 @@
-body { font-family: system-ui, sans-serif; max-width: 700px; margin: 40px auto; padding: 0 16px; color: #222; }
-h1 { font-size: 1.4rem; }
-#search-box { position: relative; }
+/* Page layout (laptop screens): search on top, map on the left,
+   departures panel on the right, credits at the bottom. */
+html, body { height: 100%; margin: 0; }
+body { font-family: system-ui, sans-serif; color: #222; display: flex; flex-direction: column; }
+header { display: flex; align-items: center; gap: 24px; padding: 10px 16px; border-bottom: 1px solid #ddd; }
+h1 { font-size: 1.2rem; margin: 0; white-space: nowrap; }
+main { flex: 1; display: flex; min-height: 0; }
+#map-area { flex: 1; position: relative; min-width: 0; }
+#map { position: absolute; inset: 0; }
+#panel { width: 560px; flex-shrink: 0; overflow-y: auto; padding: 0 16px 16px; border-left: 1px solid #ddd; box-sizing: border-box; }
+#credits { padding: 5px 16px; border-top: 1px solid #ddd; font-size: 0.8rem; color: #666; min-height: 1.1em; }
+#credits a { color: #005aa9; }
+
+/* on the map: a note when something is wrong, and what the colours mean */
+#map-note { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 1000; max-width: 80%; padding: 8px 14px; border: 1px solid #e0c36a; border-radius: 6px; background: #fff8e1; font-size: 0.9rem; }
+#legend { position: absolute; left: 10px; bottom: 24px; z-index: 1000; display: flex; flex-direction: column; gap: 3px; padding: 7px 10px; border: 1px solid #ccc; border-radius: 6px; background: rgba(255, 255, 255, 0.92); font-size: 0.8rem; }
+.dot { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 50%; border: 1px solid white; box-shadow: 0 0 0 1px #999; }
+.dot.kind-rail { background: #c1121c; }
+.dot.kind-urban_rail { background: #005aa9; }
+.dot.kind-bus { background: #a1338f; }
+
+#search-box { position: relative; flex: 1; max-width: 620px; }
 input[type=text] { width: 100%; padding: 10px; font-size: 1rem; box-sizing: border-box; border: 1px solid #aaa; border-radius: 4px; }
-#results { position: absolute; background: white; border: 1px solid #ccc; width: 100%; z-index: 10; max-height: 220px; overflow-y: auto; box-sizing: border-box; }
+#results { position: absolute; background: white; border: 1px solid #ccc; width: 100%; z-index: 2000; max-height: 220px; overflow-y: auto; box-sizing: border-box; }
 #results div { padding: 8px 10px; cursor: pointer; }
 #results div:hover { background: #eef; }
-#status { color: #777; margin-top: 10px; font-size: 0.9rem; }
+#status { color: #777; margin-top: 12px; font-size: 0.9rem; }
 
 /* station header: name, nearby stations, transport-type tabs */
 .station-name { font-size: 1.2rem; margin: 22px 0 4px; }

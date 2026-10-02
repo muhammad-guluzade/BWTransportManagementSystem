@@ -22,6 +22,8 @@ let lastData = null;
 let lastUrl = '';              // the API address lastData came from
 let showRaw = false;           // "Show API response" is switched on
 let requestCounter = 0;        // to ignore answers that arrive out of order
+let selectedFrom = null;       // where the current stop was picked: 'search', 'link' or 'map'
+let announced = true;          // the map has been told about the current stop
 const expanded = new Set();    // platforms the user clicked "Show more" on
 
 // departure times arrive in UTC; show them in local German time
@@ -71,15 +73,19 @@ async function searchStops(q) {
   resultsBox.innerHTML = '';
   stops.forEach(s => {
     const div = el('div', '', s.name);
-    div.onclick = () => selectStop(s.id, s.name);
+    div.onclick = () => selectStop(s.id, s.name, 'search');
     resultsBox.appendChild(div);
   });
 }
 
-function selectStop(id, name) {
+// `source` says where the stop was picked ('search', 'link' or 'map'), so the
+// map knows whether it should move there
+function selectStop(id, name, source = 'search') {
   input.value = name;
   resultsBox.innerHTML = '';
   currentStopId = id;
+  selectedFrom = source;
+  announced = false;
   currentTab = '';
   expanded.clear();
   stationBox.innerHTML = '';
@@ -119,6 +125,12 @@ async function loadDepartures() {
   lastUrl = url;
   currentTab = lastData.tab || '';
   render();
+  if (!announced) {
+    // tell the map which stop is shown now (once per selection, not per refresh)
+    announced = true;
+    input.value = lastData.stop.name;
+    document.dispatchEvent(new CustomEvent('stop-shown', { detail: { stop: lastData.stop, source: selectedFrom } }));
+  }
   status.textContent = 'Updated ' + new Date().toLocaleTimeString();
 }
 
@@ -150,7 +162,7 @@ function renderRaw() {
 function stopLink(stop) {
   const link = el('a', '', stop.name);
   link.href = '#';
-  link.onclick = (e) => { e.preventDefault(); selectStop(stop.id, stop.name); };
+  link.onclick = (e) => { e.preventDefault(); selectStop(stop.id, stop.name, 'link'); };
   return link;
 }
 

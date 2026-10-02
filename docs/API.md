@@ -47,7 +47,7 @@ Lists the endpoints.
   "version": 1,
   "endpoints": {
     "search_stops": "/api/v1/stops/search?q={text}",
-    "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}",
+    "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}",
     "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}"
   },
   "stop_data": {
@@ -114,16 +114,27 @@ Example: `/api/v1/stops/search?q=Stuttgart Hauptbahnhof`
 | `lat`, `lon` | Position of the stop. |
 | `types` | Transport types the timetable service lists for the stop. A hint only: it can include a type that has no departures. The departures endpoint returns the verified list as `tabs`. |
 
-### `GET /api/v1/stops?bbox={west},{south},{east},{north}&limit={n}`
+### `GET /api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}`
 
 The stations inside a rectangle, most important first. Made for maps: ask
-for the top stations of whatever the map currently shows, and you get the
+for the stations of whatever the map currently shows, and you get the
 main stations when zoomed out and every stop when zoomed in.
 
 | Parameter | | |
 |---|---|---|
 | `bbox` | required | The rectangle as `west,south,east,north` in degrees (WGS84), e.g. `9.10,48.74,9.26,48.83`. |
 | `limit` | optional | How many stations to return at most. Default 100, maximum 500. |
+| `spread` | optional | `1` to pick the stations evenly across the rectangle instead of strictly by importance. Default `0`. |
+
+Without `spread`, a rectangle holding more stations than `limit` returns the
+most important ones, which on a map of the whole state all sit in the big
+cities. With `spread=1` the rectangle is divided into a grid and the most
+important station of each cell is returned, so every region is covered. The
+grid is fixed to the globe and its cells double in size from one zoom step to
+the next, so panning a map keeps the same stations. Once all stations of the
+rectangle fit into `limit`, both variants return all of them. The response
+has the same shape either way; with `spread=1` it can hold fewer than
+`limit` stations.
 
 Example: `/api/v1/stops?bbox=9.10,48.74,9.26,48.83&limit=3` (central Stuttgart)
 
