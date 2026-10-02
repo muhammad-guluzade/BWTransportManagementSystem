@@ -3,10 +3,51 @@ import logging
 from collections import Counter
 
 from efa import client, parse
+from gtfs import store
 
 log = logging.getLogger(__name__)
 
 MAX_RESULTS = 15
+
+AREA_DEFAULT_LIMIT = 100
+AREA_MAX_LIMIT = 500
+
+
+class InvalidArea(ValueError):
+    """The requested rectangle or limit isn't usable."""
+
+
+def data_info() -> dict | None:
+    """Where the stop database comes from and how fresh it is, or None if
+    it hasn't been built: {attribution, source, version, valid_until,
+    imported_at, stations, expired}."""
+    try:
+        return store.info()
+    except store.StopsNotImported:
+        return None
+
+
+def in_area(bbox: str, limit: str = "") -> dict:
+    """The most important stations inside a rectangle, most important
+    first: {stops: [{id, name, lat, lon, lines, kinds}], total, limit}.
+
+    `bbox` is "west,south,east,north" in degrees. Asking for the top few
+    stations of whatever a map currently shows gives the main stations
+    when zoomed out and every stop when zoomed in."""
+    try:
+        west, south, east, north = (float(part) for part in bbox.split(","))
+    except ValueError:
+        raise InvalidArea("bbox must be four numbers: west,south,east,north") from None
+    if not (-180 <= west < east <= 180 and -90 <= south < north <= 90):
+        raise InvalidArea("bbox must be west,south,east,north with west < east and south < north")
+    try:
+        count = int(limit) if limit else AREA_DEFAULT_LIMIT
+    except ValueError:
+        raise InvalidArea("limit must be a whole number") from None
+    count = max(1, min(count, AREA_MAX_LIMIT))
+
+    stops, total = store.in_area(west, south, east, north, count)
+    return {"stops": stops, "total": total, "limit": count}
 
 
 def parse_points(points: list) -> list:

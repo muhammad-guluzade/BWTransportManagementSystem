@@ -11,6 +11,7 @@ anything that renames or removes a field belongs in a new version.
 from flask import Blueprint, current_app, jsonify, request
 
 from efa.client import EfaError
+from gtfs.store import StopsNotImported
 from services import departures, stops
 
 bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
@@ -33,6 +34,16 @@ def unknown_stop(exc):
     return error(404, "unknown_stop", "This stop could not be found.")
 
 
+@bp.errorhandler(stops.InvalidArea)
+def invalid_area(exc):
+    return error(400, "invalid_parameter", str(exc))
+
+
+@bp.errorhandler(StopsNotImported)
+def stops_not_imported(exc):
+    return error(503, "stops_not_imported", "The stop database has not been built yet. Run: python import_stops.py")
+
+
 @bp.route("/")
 def index():
     return jsonify({
@@ -40,9 +51,17 @@ def index():
         "version": 1,
         "endpoints": {
             "search_stops": "/api/v1/stops/search?q={text}",
+            "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}",
             "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}",
         },
+        # null until the stop database has been built (python import_stops.py)
+        "stop_data": stops.data_info(),
     })
+
+
+@bp.route("/stops")
+def stops_in_area():
+    return jsonify(stops.in_area(request.args.get("bbox", ""), request.args.get("limit", "")))
 
 
 @bp.route("/stops/search")

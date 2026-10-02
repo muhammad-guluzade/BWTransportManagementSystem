@@ -264,8 +264,8 @@ function renderEmpty(data) {
     });
     notice.appendChild(list);
   } else {
-    notice.appendChild(el('p', '', 'The timetable has no departures for this station at the moment. '
-      + 'The line may be closed or not running in this period.'));
+    notice.appendChild(el('p', '', 'The timetable has no departures for this station in the coming days. '
+      + 'It may be served only on certain days (school days, a season), or the line may be closed.'));
   }
   return notice;
 }

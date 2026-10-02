@@ -47,10 +47,29 @@ Lists the endpoints.
   "version": 1,
   "endpoints": {
     "search_stops": "/api/v1/stops/search?q={text}",
+    "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}",
     "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}"
+  },
+  "stop_data": {
+    "attribution": "Datensatz der NVBW GmbH",
+    "source": "https://www.nvbw.de/open-data",
+    "version": "20260929",
+    "valid_until": "2026-12-12",
+    "imported_at": "2026-10-02T01:37:45Z",
+    "stations": 29387,
+    "expired": false
   }
 }
 ```
+
+`stop_data` describes the stop database behind the "stops in an area"
+endpoint: which release of NVBW's timetable file it was built from
+(`version`), the last day of the timetable period that file covers
+(`valid_until`), and when it was imported. `expired` turns `true` after
+`valid_until`: the stops are probably still right, but a newer file should
+be imported. `stop_data` is `null` until the database has been built. A
+client that shows stops from this API must show `attribution` with a link
+to `source`.
 
 ### `GET /api/v1/stops/search?q={text}`
 
@@ -94,6 +113,70 @@ Example: `/api/v1/stops/search?q=Stuttgart Hauptbahnhof`
 | `name` | Full name including the town. When two results share a name, what stops there is appended (`"Kehl, Bahnhof · Bus"`). |
 | `lat`, `lon` | Position of the stop. |
 | `types` | Transport types the timetable service lists for the stop. A hint only: it can include a type that has no departures. The departures endpoint returns the verified list as `tabs`. |
+
+### `GET /api/v1/stops?bbox={west},{south},{east},{north}&limit={n}`
+
+The stations inside a rectangle, most important first. Made for maps: ask
+for the top stations of whatever the map currently shows, and you get the
+main stations when zoomed out and every stop when zoomed in.
+
+| Parameter | | |
+|---|---|---|
+| `bbox` | required | The rectangle as `west,south,east,north` in degrees (WGS84), e.g. `9.10,48.74,9.26,48.83`. |
+| `limit` | optional | How many stations to return at most. Default 100, maximum 500. |
+
+Example: `/api/v1/stops?bbox=9.10,48.74,9.26,48.83&limit=3` (central Stuttgart)
+
+```json
+{
+  "stops": [
+    {
+      "id": "de:08111:6115",
+      "name": "Stuttgart Hauptbahnhof (oben)",
+      "lat": 48.78523,
+      "lon": 9.183086,
+      "lines": 32,
+      "kinds": ["rail", "urban_rail"]
+    },
+    {
+      "id": "de:08111:6112",
+      "name": "Hauptbf (Arnulf-Klett-Platz)",
+      "lat": 48.783124,
+      "lon": 9.181263,
+      "lines": 34,
+      "kinds": ["rail", "urban_rail", "bus"]
+    },
+    {
+      "id": "de:08111:6333",
+      "name": "Bad Cannstatt",
+      "lat": 48.801515,
+      "lon": 9.217323,
+      "lines": 23,
+      "kinds": ["rail", "urban_rail", "bus"]
+    }
+  ],
+  "total": 427,
+  "limit": 3
+}
+```
+
+| Field | |
+|---|---|
+| `stops[].id` | Stop id; the same ids as in the search and the departures endpoint. |
+| `stops[].name` | Name from the timetable file. Shorter than in the search: often without the town (`"Pragfriedhof"`). |
+| `stops[].lat`, `lon` | Position: the middle of the station's platforms (the busiest platform, if they are more than 300 m apart). |
+| `stops[].lines` | How many different lines call at the station. |
+| `stops[].kinds` | Coarse kinds of transport, from: `rail`, `urban_rail` (S-Bahn, U-Bahn, tram), `bus`, `other`. For map symbols; the departures endpoint has the exact types. |
+| `total` | How many stations the rectangle contains in all. |
+| `limit` | The limit that was applied. |
+
+Stations are ranked by an importance score built from how busy a station
+is (departures) and how connected (lines). Rail counts most, then urban
+rail, then bus; rail replacement buses count as buses.
+
+This endpoint reads the stop database, which is built from NVBW's open
+timetable file with `python import_stops.py` (see "Where the data comes
+from"). Until that has been run, it answers `503 stops_not_imported`.
 
 ### `GET /api/v1/stops/{stop_id}/departures?tab={tab_id}`
 
@@ -239,15 +322,24 @@ Errors use the matching HTTP status and always have this shape:
 
 | Status | `code` | When |
 |---|---|---|
+| 400 | `invalid_parameter` | A parameter is missing or malformed, e.g. `bbox`. The message says which. |
 | 404 | `unknown_stop` | The stop id doesn't exist or is outside Baden-Württemberg. |
 | 404 | `not_found` | No such API address. |
 | 405 | `method_not_allowed` | Anything other than `GET`. |
 | 502 | `timetable_unavailable` | The timetable service behind this API didn't answer. Try again later. |
+| 503 | `stops_not_imported` | The stop database hasn't been built on this server yet (`python import_stops.py`). |
 
 `code` is for programs, `message` for people.
 
 ## Where the data comes from
 
-The statewide timetable service of Baden-Württemberg (EFA). It is used
-without an official agreement and its format can change; this API hides
-that format, so clients only depend on what is documented here.
+**Search and departures:** the statewide timetable service of
+Baden-Württemberg (EFA), asked live. It is used without an official
+agreement and its format can change; this API hides that format, so clients
+only depend on what is documented here.
+
+**Stops in an area:** a local database built from the open timetable file of
+NVBW (Nahverkehrsgesellschaft Baden-Württemberg), which is published twice a
+month. Attribution: "Datensatz der NVBW GmbH", <https://www.nvbw.de/open-data>,
+licence Datenlizenz Deutschland - Namensnennung - Version 2.0. A client that
+shows this data must show that attribution too.

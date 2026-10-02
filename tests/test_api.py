@@ -64,7 +64,7 @@ class IndexTest(ApiTestCase):
     def test_index_lists_the_endpoints(self):
         body = self.http.get("/api/v1/").get_json()
         self.assertEqual(body["version"], 1)
-        self.assertEqual(set(body["endpoints"]), {"search_stops", "departures"})
+        self.assertEqual(set(body["endpoints"]), {"search_stops", "stops_in_area", "departures"})
 
 
 class SearchTest(ApiTestCase):
