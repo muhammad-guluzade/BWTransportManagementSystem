@@ -52,15 +52,20 @@ def to_stop(row: sqlite3.Row) -> dict:
     }
 
 
-def grid_cell(west: float, east: float, south: float, north: float, limit: int) -> float:
-    """Width in degrees of longitude of the grid cells that spread about
-    `limit` stations over the rectangle.
+def cell_sizes(west: float, east: float, south: float, north: float, limit: int):
+    """Candidate grid cell widths (degrees of longitude) for spreading
+    `limit` stations over the rectangle, from fine to coarse.
 
-    The width is rounded to a power of two and the grid is anchored to the
-    globe, not to the rectangle: moving the rectangle a little (panning a
-    map) then keeps the same cells, and so the same stations."""
-    cells_across = math.sqrt(limit * (east - west) * LAT_PER_LON / (north - south))
-    return 2.0 ** round(math.log2((east - west) / max(cells_across, 1)))
+    Sizes come from a fixed ladder (powers of two and the steps half-way
+    between) and the grid is anchored to the globe, not to the rectangle:
+    moving the rectangle a little (panning a map) then keeps the same cells,
+    and so the same stations. The first candidate would give about four
+    times `limit` cells; each next one halves the number."""
+    exact = math.sqrt((east - west) * (north - south) / (limit * LAT_PER_LON))   # exactly `limit` cells
+    rung = math.floor(2 * math.log2(exact)) - 2
+    while True:
+        yield 2.0 ** (rung / 2)
+        rung += 1
 
 
 def in_area(west: float, south: float, east: float, north: float, limit: int, spread: bool = False) -> tuple:
@@ -75,7 +80,15 @@ def in_area(west: float, south: float, east: float, north: float, limit: int, sp
     box = (south, north, west, east)
     total = query(f"SELECT COUNT(*) FROM stations WHERE {where}", box)[0][0]
     if spread and total > limit:
-        width = grid_cell(west, east, south, north, limit)
+        # the finest grid whose occupied cells all fit: as many stations as the
+        # limit allows, without having to drop whole regions
+        for width in cell_sizes(west, east, south, north, limit):
+            occupied = query(
+                f"""SELECT COUNT(*) FROM (SELECT DISTINCT CAST(lon / ? AS INTEGER), CAST(lat / ? AS INTEGER)
+                                         FROM stations WHERE {where})""",
+                (width, width * LAT_PER_LON, *box))[0][0]
+            if occupied <= limit:
+                break
         rows = query(
             f"""SELECT * FROM (
                     SELECT *, ROW_NUMBER() OVER (

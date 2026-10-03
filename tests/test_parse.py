@@ -1,7 +1,7 @@
 """Tests for the normalisation rules. Inputs mirror real EFA responses
 (field names and values as seen via debug_efa.py)."""
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from efa import parse
 from services.departures import group_departures, platform_sort_key
@@ -416,8 +416,15 @@ class BoardTest(unittest.TestCase):
             }]},
         }
 
-        def get_departures(stop_id, classes=(), limit=100, with_stops=True, ttl=0):
+        # station id -> events EFA only has from this moment on (beyond its 24-hour window)
+        self.later = {}
+
+        def get_departures(stop_id, classes=(), limit=100, with_stops=True, ttl=0, start=None):
             self.requests.append((stop_id, tuple(classes), limit))
+            if start is not None:
+                first, events = self.later.get(stop_id, (None, []))
+                found = events if first and start <= first < start + timedelta(hours=24) else []
+                return {"stopEvents": found[:limit]} if found else {}
             by_class = self.events.get(stop_id, {})
             found = [e for cls, evs in by_class.items() if not classes or cls in classes for e in evs]
             return {"stopEvents": found[:limit]} if found else {}
@@ -515,12 +522,40 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(result["nearby"], [{"id": self.TIEF, "name": "Stuttgart Hauptbahnhof (tief)", "lat": None,
                                              "lon": None, "types": [{"id": "sbahn", "name": "S-Bahn"}]}])
 
+    def test_stop_without_service_today_shows_its_next_service_day(self):
+        # like a school-day bus stop on a Saturday: nothing in EFA's 24 hours,
+        # but departures three days from now
+        self.events[self.HBF] = {}
+        in_three_days = datetime.now(timezone.utc) + timedelta(days=3)
+        when = in_three_days.strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.later[self.HBF] = (in_three_days, [event(5, line="503", planned=when)])
+        result = self.board(self.HBF)
+        self.assertIsNone(result["empty"])
+        self.assertEqual(result["tabs"], [])
+        lines = [r["line"] for m in result["modes"] for p in m["platforms"] for r in p["departures"]]
+        self.assertEqual(lines, ["503"])
+        from efa.localtime import to_local
+        self.assertEqual(result["next_service"], to_local(in_three_days).date().isoformat())
+
+    def test_look_ahead_is_only_used_for_empty_boards(self):
+        self.later[self.HBF] = (datetime.now(timezone.utc) + timedelta(days=3), [event(5, line="503")])
+        result = self.board(self.HBF)
+        self.assertIsNone(result["next_service"])
+        self.assertEqual(result["tab"], "trains")
+
+    def test_look_ahead_skips_days_with_only_hidden_services(self):
+        self.events[self.HBF] = {}
+        self.later[self.HBF] = (datetime.now(timezone.utc) + timedelta(days=2), [event(10, line="RT6")])  # on-demand only
+        result = self.board(self.HBF)
+        self.assertEqual((result["next_service"], result["empty"]), (None, "nearby"))
+
     def test_empty_station_without_any_service(self):
         # like Ehingen: the timetable has nothing, here or nearby
         self.events = {}
         result = self.board(self.HBF)
         self.assertEqual(result["empty"], "no_service")
         self.assertEqual(result["nearby"], [])
+        self.assertIsNone(result["next_service"])
 
 
 class SearchTest(unittest.TestCase):
@@ -530,6 +565,55 @@ class SearchTest(unittest.TestCase):
         with self.assertLogs("services.stops", level="WARNING"):
             stops = parse_points([good, {"anyType": "stop", "ref": "not an object"}, {"anyType": "street"}])
         self.assertEqual([s["id"] for s in stops], ["de:08311:6508"])
+
+
+class LocalTimeTest(unittest.TestCase):
+    def local(self, *utc):
+        from efa.localtime import to_local
+        return to_local(datetime(*utc, tzinfo=timezone.utc))
+
+    def test_summer_and_winter(self):
+        self.assertEqual(self.local(2026, 7, 1, 12, 0), datetime(2026, 7, 1, 14, 0))
+        self.assertEqual(self.local(2026, 12, 1, 12, 0), datetime(2026, 12, 1, 13, 0))
+        self.assertEqual(self.local(2026, 12, 31, 23, 30), datetime(2027, 1, 1, 0, 30))
+
+    def test_the_clock_changes_at_one_utc_on_the_last_sunday(self):
+        # 25 October 2026 and 28 March 2027 are the last Sundays
+        self.assertEqual(self.local(2026, 10, 25, 0, 59), datetime(2026, 10, 25, 2, 59))
+        self.assertEqual(self.local(2026, 10, 25, 1, 0), datetime(2026, 10, 25, 2, 0))
+        self.assertEqual(self.local(2027, 3, 28, 0, 59), datetime(2027, 3, 28, 1, 59))
+        self.assertEqual(self.local(2027, 3, 28, 1, 0), datetime(2027, 3, 28, 3, 0))
+
+
+class ClientRequestTest(unittest.TestCase):
+    """What the EFA client asks for (the request itself is replaced)."""
+
+    def setUp(self):
+        from efa import client
+        self.client = client
+        self.original = client.efa_get
+        self.asked = []
+        client.efa_get = lambda endpoint, params, ttl=0: self.asked.append(params) or {}
+
+    def tearDown(self):
+        self.client.efa_get = self.original
+
+    def test_now_by_default(self):
+        self.client.get_departures("de:08111:115")
+        self.assertNotIn("itdDate", self.asked[0])
+        self.assertEqual(self.asked[0]["deleteAssignedStops_dm"], 1)
+
+    def test_start_is_sent_in_german_local_time(self):
+        self.client.get_departures("de:08111:115", start=datetime(2026, 10, 5, 4, 0, tzinfo=timezone.utc))
+        self.client.get_departures("de:08111:115", start=datetime(2026, 12, 1, 23, 30, tzinfo=timezone.utc))
+        self.assertEqual((self.asked[0]["itdDate"], self.asked[0]["itdTime"]), ("20261005", "0600"))
+        self.assertEqual((self.asked[1]["itdDate"], self.asked[1]["itdTime"]), ("20261202", "0030"))
+
+    def test_classes_and_stop_sequence(self):
+        self.client.get_departures("de:08111:115", (1, 13), limit=1, with_stops=False)
+        params = self.asked[0]
+        self.assertEqual((params["inclMOT_1"], params["inclMOT_13"], params["limit"]), ("on", "on", 1))
+        self.assertNotIn("includeCompleteStopSeq", params)
 
 
 if __name__ == "__main__":

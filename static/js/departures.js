@@ -30,6 +30,14 @@ const expanded = new Set();    // platforms the user clicked "Show more" on
 const timeFormat = new Intl.DateTimeFormat('de-DE', {
   hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin',
 });
+// the local calendar day of a moment, as YYYY-MM-DD
+const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin' });
+// "Mon" and "05.10." for departures that are not today
+const weekdayFormat = new Intl.DateTimeFormat('en-GB', { weekday: 'short', timeZone: 'Europe/Berlin' });
+const dateFormat = new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Berlin' });
+const longDateFormat = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+// a clock time alone is ambiguous from this many minutes ahead on
+const SHOW_DAY_FROM_MINUTES = 12 * 60;
 
 input.addEventListener('input', () => {
   clearTimeout(debounceTimer);
@@ -195,6 +203,15 @@ function formatTime(iso) {
   return iso ? timeFormat.format(new Date(iso)) : '?';
 }
 
+// "Mon 05.10." if the departure is on another day and far enough away that
+// the clock time alone could be misread; otherwise ''
+function dayLabel(dep) {
+  if (!dep.time || dep.minutes === null || dep.minutes < SHOW_DAY_FROM_MINUTES) return '';
+  const when = new Date(dep.time);
+  if (dayFormat.format(when) === dayFormat.format(new Date())) return '';
+  return `${weekdayFormat.format(when)} ${dateFormat.format(when)}`;
+}
+
 function renderDeparture(dep) {
   const row = el('tr', dep.cancelled ? 'cancelled' : '');
 
@@ -214,6 +231,8 @@ function renderDeparture(dep) {
   row.appendChild(directionCell);
 
   const timeCell = el('td', 'time');
+  const day = dayLabel(dep);
+  if (day) timeCell.appendChild(el('span', 'day', day + ' '));
   if (dep.cancelled) {
     timeCell.appendChild(el('s', '', formatTime(dep.planned || dep.time)));
     timeCell.appendChild(el('span', 'late', ' Cancelled'));
@@ -223,7 +242,7 @@ function renderDeparture(dep) {
     timeCell.appendChild(document.createTextNode(' ' + formatTime(dep.time) + ' '));
     timeCell.appendChild(el('span', 'late', `+${dep.delay} min`));
   } else {
-    timeCell.textContent = formatTime(dep.time);
+    timeCell.appendChild(document.createTextNode(formatTime(dep.time)));
   }
   row.appendChild(timeCell);
 
@@ -232,10 +251,11 @@ function renderDeparture(dep) {
   return row;
 }
 
-// 45 -> "45 min", 167 -> "2 h 47 min"
+// 45 -> "45 min", 167 -> "2 h 47 min", 3269 -> "2 d 6 h"
 function formatWait(minutes) {
   if (minutes < 60) return `${minutes} min`;
-  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+  return `${Math.floor(minutes / 1440)} d ${Math.floor((minutes % 1440) / 60)} h`;
 }
 
 function renderPlatform(mode, platform) {
@@ -276,8 +296,8 @@ function renderEmpty(data) {
     });
     notice.appendChild(list);
   } else {
-    notice.appendChild(el('p', '', 'The timetable has no departures for this station in the coming days. '
-      + 'It may be served only on certain days (school days, a season), or the line may be closed.'));
+    notice.appendChild(el('p', '', 'The timetable has no departures for this station in the next 7 days. '
+      + 'It may be served only in certain periods (school terms, a season), or the line may be closed.'));
   }
   return notice;
 }
@@ -287,6 +307,14 @@ function renderBoard(data) {
   if (data.modes.length === 0) {
     board.appendChild(renderEmpty(data));
     return;
+  }
+
+  if (data.next_service) {
+    // nothing in the next 24 hours: these are the next departures after that
+    const notice = el('div', 'notice');
+    const date = longDateFormat.format(new Date(data.next_service + 'T12:00:00Z'));
+    notice.appendChild(el('p', '', `Nothing departs here in the next 24 hours. The next departures are on ${date}:`));
+    board.appendChild(notice);
   }
 
   // modes and platforms within them already arrive pre-sorted from the backend

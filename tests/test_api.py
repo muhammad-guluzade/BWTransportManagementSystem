@@ -97,7 +97,8 @@ class DeparturesTest(ApiTestCase):
         res = self.get()
         self.assertEqual(res.status_code, 200)
         body = res.get_json()
-        self.assertEqual(list(body), ["stop", "nearby", "tabs", "tab", "modes", "empty"])
+        self.assertEqual(list(body), ["stop", "nearby", "tabs", "tab", "modes", "empty", "next_service"])
+        self.assertIsNone(body["next_service"])
         self.assertEqual(body["stop"], {"id": STOP, "name": "Stuttgart, Hauptbahnhof (oben)", "lat": 48.784729, "lon": 9.183172})
         self.assertEqual(body["nearby"], [{"id": NEIGHBOUR, "name": "Stuttgart Hauptbahnhof (tief)", "lat": 48.783385, "lon": 9.180225}])
         self.assertEqual(body["tabs"], [{"id": "trains", "name": "Trains"}])
@@ -148,6 +149,15 @@ class DeparturesTest(ApiTestCase):
             "id": NEIGHBOUR, "name": "Stuttgart Hauptbahnhof (tief)", "lat": 48.783385, "lon": 9.180225,
             "types": [{"id": "sbahn", "name": "S-Bahn"}],
         }])
+
+    def test_next_service_day_when_nothing_departs_today(self):
+        def only_later(stop_id, classes=(), start=None, **kw):
+            return {"stopEvents": [EVENT]} if stop_id == STOP and start is not None else {}
+        client.get_departures = only_later
+        body = self.get().get_json()
+        # EVENT is planned for 1 October 2026, 08:00 UTC = 10:00 local time
+        self.assertEqual((body["next_service"], body["empty"], body["tabs"], body["tab"]), ("2026-10-01", None, [], None))
+        self.assertEqual(body["modes"][0]["platforms"][0]["departures"][0]["line"], "RE5")
 
     def test_empty_station_without_service(self):
         client.get_departures = lambda stop_id, classes=(), **kw: {}

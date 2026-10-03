@@ -27,6 +27,10 @@
   // marker colours per kind of transport, most important kind first
   const KIND_COLOURS = [['rail', '#c1121c'], ['urban_rail', '#005aa9'], ['bus', '#a1338f']];
   const OTHER_COLOUR = '#666';
+  // the stop data gives a few different stops the very same position; their
+  // markers are drawn this many pixels apart so that each can be clicked
+  const SAME_SPOT_METRES = 3;
+  const SAME_SPOT_SHIFT_PX = 16;
 
   const map = L.map('map', {
     maxBounds: BW.pad(0.1),       // the map can't be dragged away from BW
@@ -63,11 +67,27 @@
     return match ? match[1] : OTHER_COLOUR;
   }
 
+  // where to draw each stop: its own position, or a little to the right of it
+  // if a more important stop already sits on exactly that spot
+  function markerPositions(stops) {
+    const positions = new Map();
+    const taken = [];
+    stops.forEach(stop => {
+      const spot = L.latLng(stop.lat, stop.lon);
+      const before = taken.filter(other => map.distance(other, spot) < SAME_SPOT_METRES).length;
+      taken.push(spot);
+      positions.set(stop.id, before === 0 ? spot
+        : map.layerPointToLatLng(map.latLngToLayerPoint(spot).add([SAME_SPOT_SHIFT_PX * before, 0])));
+    });
+    return positions;
+  }
+
   function drawStops(stops) {
     stopsLayer.clearLayers();
+    const positions = markerPositions(stops);
     // least important first, so the important markers end up on top
     stops.slice().reverse().forEach(stop => {
-      const marker = L.circleMarker([stop.lat, stop.lon], {
+      const marker = L.circleMarker(positions.get(stop.id), {
         radius: 5 + Math.min(stop.lines, 30) / 6,   // more lines = bigger, 5 to 10 px
         color: 'white',
         weight: 1.5,
@@ -80,7 +100,7 @@
       stopsLayer.addLayer(marker);
       // the timetable service and the stop database place a station a few
       // metres apart; keep the ring exactly on the marker
-      if (stop.id === selectedId) drawRing(stop.lat, stop.lon);
+      if (stop.id === selectedId) drawRing(marker.getLatLng().lat, marker.getLatLng().lng);
     });
   }
 

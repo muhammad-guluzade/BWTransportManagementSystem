@@ -62,6 +62,7 @@ tr:last-child td { border-bottom: none; }
 .via { color: #777; font-size: 0.85rem; margin-top: 2px; }
 .time { white-space: nowrap; text-align: right; }
 .time s { color: #999; }
+.time .day { color: #666; }
 .late { color: #c1121c; font-weight: bold; }
 .minutes { color: #666; text-align: right; white-space: nowrap; width: 1%; }
 tr.cancelled .destination, tr.cancelled .via { text-decoration: line-through; color: #999; }

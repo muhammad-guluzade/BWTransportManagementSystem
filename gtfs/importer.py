@@ -17,6 +17,7 @@ import re
 import sqlite3
 import zipfile
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -51,6 +52,12 @@ BUS_PLACE = re.compile(r"ZOB|Busbahnhof|Rathaus|straße|Platz|Südausgang", re.I
 # places; their average would be a point where nothing stops.
 WIDE_STATION_METRES = 300
 
+# The file lists a few stops twice: same name, same place, two ids, of which
+# the live timetable service (EFA) knows only one. A marker for the other one
+# would open "This stop could not be found". Stations with the same name this
+# close together are checked with EFA, and ids it doesn't know are dropped.
+TWIN_METRES = 30
+
 COLUMNS = ("id", "name", "lat", "lon",
            "rail_lines", "urban_lines", "bus_lines", "other_lines", "lines",
            "rail_calls", "urban_calls", "bus_calls", "other_calls", "calls",
@@ -66,7 +73,8 @@ CREATE_TABLES = (
         bus_lines   INTEGER NOT NULL,
         other_lines INTEGER NOT NULL,
         lines       INTEGER NOT NULL,   -- all of the above together
-        rail_calls  INTEGER NOT NULL,   -- departures per kind in the whole timetable period
+        rail_calls  INTEGER NOT NULL,   -- scheduled trips per kind calling here (each trip once,
+                                        -- however many days it runs)
         urban_calls INTEGER NOT NULL,
         bus_calls   INTEGER NOT NULL,
         other_calls INTEGER NOT NULL,
@@ -145,7 +153,8 @@ def importance(lines: dict, calls: dict) -> float:
     """How important a station is, as one number; `lines` and `calls` are
     counts per kind.
 
-    Two things count: how busy it is (departures) and how connected (lines).
+    Two things count: how busy it is (scheduled trips calling there, each
+    counted once however many days it runs) and how connected (lines).
     Rail counts most, then urban rail, then bus. Departures go in as a square
     root and lines are capped, so that a bus station with 60 lines doesn't
     outrank a main railway station. The weights were chosen against pairs of
@@ -218,8 +227,8 @@ def read_feed(zip_path: Path) -> tuple:
             routes[r["route_id"]] = (r["route_short_name"].strip() or r["route_long_name"].strip(), kind)
         trip_route = {r["trip_id"]: r["route_id"] for r in read_table(archive, "trips.txt")}
         lines = defaultdict(set)             # station -> {(line name, kind)}
-        calls = defaultdict(Counter)         # station -> kind -> departures
-        platform_calls = Counter()           # platform -> departures
+        calls = defaultdict(Counter)         # station -> kind -> scheduled trips calling there
+        platform_calls = Counter()           # platform -> scheduled trips calling there
         with archive.open("stop_times.txt") as raw:
             reader = csv.reader(io.TextIOWrapper(raw, encoding="utf-8-sig"))
             header = next(reader, [])
@@ -265,6 +274,59 @@ def read_feed(zip_path: Path) -> tuple:
     return stations, feed
 
 
+def twin_candidates(stations: list) -> list:
+    """Ids of stations that share their name with another station less than
+    TWIN_METRES away (stations as tuples in COLUMNS order)."""
+    cells = defaultdict(list)
+    for st in stations:
+        cells[(round(st[2] * 1000), round(st[3] * 1000))].append(st)
+    twins = set()
+    for st in stations:
+        cy, cx = round(st[2] * 1000), round(st[3] * 1000)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                for other in cells[(cy + dy, cx + dx)]:
+                    if other[0] != st[0] and other[1] == st[1] and metres(st[2:4], other[2:4]) < TWIN_METRES:
+                        twins.update((st[0], other[0]))
+    return sorted(twins)
+
+
+def efa_knows(stop_id: str) -> bool:
+    """Does the live timetable service know this stop id? Raises if it can't
+    be reached. (EFA answers an unknown id with nothing, or with some other
+    stop it matched loosely.)"""
+    from efa import client, parse   # only the import needs the live service
+    station = parse.parse_station(client.get_station(stop_id))
+    return bool(station) and station["id"] == stop_id
+
+
+def drop_ghosts(stations: list, knows=efa_knows) -> tuple:
+    """(stations without ghost ids, note for the person running the import).
+
+    Only twin candidates are checked, about 40 ids. If the service can't be
+    reached, nothing is dropped. If neither id of a pair is known, both stay:
+    there is no way to tell which one is right."""
+    candidates = twin_candidates(stations)
+    if not candidates:
+        return stations, "no duplicate stops to check"
+    try:
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            known = dict(zip(candidates, pool.map(knows, candidates)))
+    except Exception as e:  # noqa: BLE001 -- any failure: keep everything
+        return stations, (f"could not check {len(candidates)} possible duplicate stops with the timetable service "
+                          f"({type(e).__name__}); all were kept")
+    by_name = defaultdict(list)
+    for sid in candidates:
+        by_name[next(st[1] for st in stations if st[0] == sid)].append(sid)
+    ghosts = set()
+    for ids in by_name.values():
+        if any(known[sid] for sid in ids):
+            ghosts.update(sid for sid in ids if not known[sid])
+    kept = [st for st in stations if st[0] not in ghosts]
+    return kept, (f"checked {len(candidates)} possible duplicate stops with the timetable service; "
+                  f"removed {len(ghosts)} it does not know")
+
+
 def existing_station_count(db: sqlite3.Connection) -> int:
     try:
         return db.execute("SELECT COUNT(*) FROM stations").fetchone()[0]
@@ -273,9 +335,12 @@ def existing_station_count(db: sqlite3.Connection) -> int:
 
 
 def build(zip_path: Path, db_path: Path, source: str = SOURCE_URL, min_stations: int = MIN_STATIONS,
-          force: bool = False) -> dict:
+          force: bool = False, knows=efa_knows) -> dict:
     """Read the GTFS file at `zip_path` and fill the stop database at
     `db_path` with it, replacing what it held. Returns some numbers about it.
+
+    `knows(stop_id)` tells whether the live timetable service knows a stop;
+    it is asked about duplicate stops only (see drop_ghosts). None skips that.
 
     Raises BadFeed, and leaves an existing database as it was, if the file
     can't be read or holds far fewer stations than expected. `force` skips
@@ -290,6 +355,10 @@ def build(zip_path: Path, db_path: Path, source: str = SOURCE_URL, min_stations:
     except (ValueError, IndexError, csv.Error, UnicodeDecodeError) as e:
         raise BadFeed(f"the file has content the import can't read ({e}). NVBW may have changed the format.") from None
 
+    duplicates = "not checked"
+    if knows is not None:
+        stations, duplicates = drop_ghosts(stations, knows)
+
     meta = {
         "source": source,
         "attribution": "Datensatz der NVBW GmbH",
@@ -298,6 +367,7 @@ def build(zip_path: Path, db_path: Path, source: str = SOURCE_URL, min_stations:
         "feed_end_date": feed.get("feed_end_date", ""),
         "imported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "stations": str(len(stations)),
+        "duplicates": duplicates,
     }
 
     db_path.parent.mkdir(parents=True, exist_ok=True)

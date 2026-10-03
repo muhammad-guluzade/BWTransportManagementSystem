@@ -7,8 +7,11 @@ change without notice. Run debug_efa.py if anything here misbehaves.
 """
 import threading
 import time
+from datetime import datetime
 
 import requests
+
+from efa.localtime import to_local
 
 EFA_BASE = "https://www.efa-bw.de/nvbw/"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TransitDemo/0.1)"}
@@ -103,8 +106,11 @@ def get_station(stop_id: str) -> dict:
     )
 
 
-def get_departures(stop_id: str, classes=(), limit: int = 100, with_stops: bool = True, ttl: int = DEPARTURES_TTL) -> dict:
+def get_departures(stop_id: str, classes=(), limit: int = 100, with_stops: bool = True, ttl: int = DEPARTURES_TTL,
+                   start: datetime | None = None) -> dict:
     """Raw departure-monitor response for one station.
+
+    EFA answers with departures of the 24 hours after `start` (default: now).
 
     `classes` restricts it to those EFA product classes (e.g. (1,) for
     S-Bahn), so a busy mode can't crowd the others out of `limit`.
@@ -126,6 +132,9 @@ def get_departures(stop_id: str, classes=(), limit: int = 100, with_stops: bool 
     }
     if with_stops:
         params["includeCompleteStopSeq"] = 1
+    if start:
+        local = to_local(start)  # EFA takes the time in German local time
+        params.update({"itdDate": local.strftime("%Y%m%d"), "itdTime": local.strftime("%H%M"), "itdTripDateTimeDepArr": "dep"})
     if classes:
         params["includedMeans"] = "checkbox"
         for cls in classes:

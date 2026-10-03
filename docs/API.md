@@ -130,8 +130,8 @@ Without `spread`, a rectangle holding more stations than `limit` returns the
 most important ones, which on a map of the whole state all sit in the big
 cities. With `spread=1` the rectangle is divided into a grid and the most
 important station of each cell is returned, so every region is covered. The
-grid is fixed to the globe and its cells double in size from one zoom step to
-the next, so panning a map keeps the same stations. Once all stations of the
+finest grid whose cells all fit into `limit` is used, and the grid is fixed
+to the globe, so panning a map keeps (nearly) the same stations. Once all stations of the
 rectangle fit into `limit`, both variants return all of them. The response
 has the same shape either way; with `spread=1` it can hold fewer than
 `limit` stations.
@@ -182,8 +182,8 @@ Example: `/api/v1/stops?bbox=9.10,48.74,9.26,48.83&limit=3` (central Stuttgart)
 | `limit` | The limit that was applied. |
 
 Stations are ranked by an importance score built from how busy a station
-is (departures) and how connected (lines). Rail counts most, then urban
-rail, then bus; rail replacement buses count as buses.
+is (scheduled trips calling there) and how connected (lines). Rail counts
+most, then urban rail, then bus; rail replacement buses count as buses.
 
 This endpoint reads the stop database, which is built from NVBW's open
 timetable file with `python import_stops.py` (see "Where the data comes
@@ -251,7 +251,8 @@ and one departure)
       ]
     }
   ],
-  "empty": null
+  "empty": null,
+  "next_service": null
 }
 ```
 
@@ -264,7 +265,8 @@ and one departure)
 | `tabs` | Transport types that have departures here: `[{id, name}]`. Empty if the station has none. |
 | `tab` | The `id` of the tab this response shows, or `null`. |
 | `modes` | The departures, see below. In display order. |
-| `empty` | `null` if there are departures. Otherwise why there are none: `"nearby"` (nothing departs here, but linked stations in `nearby` have service) or `"no_service"` (the timetable has nothing for this station or the ones next to it). |
+| `empty` | `null` if there are departures. Otherwise why there are none: `"nearby"` (nothing departs here in the next 7 days, but linked stations in `nearby` have service) or `"no_service"` (the timetable has nothing for this station in the next 7 days, nor for the ones next to it). |
+| `next_service` | Normally `null`. The timetable service only knows the next 24 hours; a stop served on school days only has nothing there on a Saturday. In that case the API looks up to a week ahead, returns the first departures it finds in `modes` (all transport types together, `tabs` empty) and sets `next_service` to their local date, e.g. `"2026-10-05"`. A client should say so, and show the date with these departures. |
 
 Tab ids: `trains`, `sbahn`, `tram`, `bus`, `ferry`, `cablecar`, `other`.
 
@@ -294,7 +296,7 @@ Tab ids: `trains`, `sbahn`, `tram`, `bus`, `ferry`, `cablecar`, `other`.
 | `destination` | Where the vehicle is signed to. The town is left out if it is the station's own. |
 | `via` | Up to two major stops on the way, in travel order. Can be empty. |
 | `dticket` | `true` if the Deutschlandticket is valid. `false` means not valid or not known. |
-| `time` | Expected departure: the live time if there is one, else the planned time. |
+| `time` | Expected departure: the live time if there is one, else the planned time. Can be days ahead when `next_service` is set; show the date then. |
 | `planned` | Planned departure. |
 | `minutes` | Minutes from now until `time`, never negative. |
 | `delay` | Minutes late (negative = early), or `null` without live data. |
@@ -319,7 +321,8 @@ a station whose trains are currently replaced by buses from the bus station):
   "tabs": [],
   "tab": null,
   "modes": [],
-  "empty": "nearby"
+  "empty": "nearby",
+  "next_service": null
 }
 ```
 
@@ -354,3 +357,9 @@ NVBW (Nahverkehrsgesellschaft Baden-Württemberg), which is published twice a
 month. Attribution: "Datensatz der NVBW GmbH", <https://www.nvbw.de/open-data>,
 licence Datenlizenz Deutschland - Namensnennung - Version 2.0. A client that
 shows this data must show that attribution too.
+
+The two sources use the same stop ids. The NVBW file lists a few stops twice,
+under a second id the live service doesn't know; the import asks the live
+service about such duplicates (same name, less than 30 m apart) and leaves out
+the ids it doesn't know, so every stop of this endpoint can be opened in the
+departures endpoint.

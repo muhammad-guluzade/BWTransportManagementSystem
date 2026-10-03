@@ -3,8 +3,10 @@
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 
 from efa import client, parse
+from efa.localtime import to_local
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +25,13 @@ MODE_ORDER = [
 # why a board has no departures
 EMPTY_NEARBY = "nearby"          # nothing here, but linked stations have service
 EMPTY_NO_SERVICE = "no_service"  # the timetable has nothing for this station
+
+# EFA only answers with departures of the next 24 hours (a departure 23 hours
+# away is found, one 24 hours away is not). A stop served on school days only
+# looks dead on a Saturday. So an empty board is asked again for later days,
+# in steps a little under EFA's window, for about a week.
+LOOK_AHEAD_STEP = timedelta(hours=23)
+LOOK_AHEAD_STEPS = 7
 
 
 class UnknownStop(Exception):
@@ -157,6 +166,27 @@ def load_tab(station: dict, tab_id: str):
     return tabs, (wanted if departures else None), departures
 
 
+def later_departures(stop_id: str, now: datetime | None = None) -> list:
+    """The first departures after EFA's 24-hour window, looking about a week
+    ahead; [] if there are none."""
+    # on the hour, so that the requests of one hour can share cached answers
+    now = (now or datetime.now(timezone.utc)).replace(minute=0, second=0, microsecond=0)
+    starts = [now + LOOK_AHEAD_STEP * step for step in range(1, LOOK_AHEAD_STEPS + 1)]
+
+    def served(start):
+        data = client.get_departures(stop_id, (), limit=1, with_stops=False, ttl=client.TAB_CHECK_TTL, start=start)
+        return bool(data.get("stopEvents"))
+
+    with ThreadPoolExecutor(max_workers=len(starts)) as pool:
+        hits = list(pool.map(served, starts))
+    for start, hit in zip(starts, hits):
+        if hit:
+            departures = parse_events(client.get_departures(stop_id, (), start=start).get("stopEvents"))
+            if departures:  # not only flights or on-demand services
+                return departures
+    return []
+
+
 def nearby_with_service(nearby: list) -> list:
     """Of the linked stations, those that have departures, each with the
     transport types that really stop there: [{id, name, types: [...]}]."""
@@ -179,7 +209,10 @@ def board(stop_id: str, tab_id: str = "") -> dict:
     """The departure board for one station and tab:
     {stop: {id, name, lat, lon}, nearby: [{id, name, lat, lon}],
      tabs: [{id, name}], tab, modes: [...],
-     empty: None | "nearby" | "no_service"}."""
+     empty: None | "nearby" | "no_service", next_service: None | "YYYY-MM-DD"}.
+
+    `next_service` is set when nothing departs in the next 24 hours and the
+    departures shown are the next ones after that; it is their (local) date."""
     station = parse.parse_station(client.get_station(stop_id))
     # EFA resolves an id it doesn't know to whatever stop matches loosely,
     # anywhere in Europe; only accept stations in Baden-Württemberg
@@ -189,6 +222,13 @@ def board(stop_id: str, tab_id: str = "") -> dict:
 
     tabs, tab, departures = load_tab(station, tab_id)
     departures = dedupe(departures)
+
+    next_service = None
+    if not departures:
+        departures = dedupe(later_departures(station["id"]))
+        times = [dep["time"] for dep in departures if dep["time"]]
+        if times:
+            next_service = to_local(parse.parse_time(min(times))).date().isoformat()
 
     empty = None
     if not departures:
@@ -206,4 +246,5 @@ def board(stop_id: str, tab_id: str = "") -> dict:
         "tab": tab["id"] if tab else None,
         "modes": group_departures(departures),
         "empty": empty,
+        "next_service": next_service,
     }

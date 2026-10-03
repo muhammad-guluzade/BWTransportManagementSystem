@@ -48,7 +48,15 @@ STOPS = [
     ("de:08135:187:0:1", "Heidenheim Friedrich-Voith-Str", "0.0", "0.0", ""),
     # outside Baden-Württemberg
     ("de:09162:100:1:1", "München Hbf Gleis 1", "48.1402", "11.5600", ""),
+    # one stop listed twice: the timetable service only knows de:08226:582
+    ("de:08226:582:0:1", "Gaimühle, Bahnhof", "49.4500", "8.9800", ""),
+    ("de:08226:400582:0:1", "Gaimühle, Bahnhof", "49.4500", "8.9800", ""),
+    # two real stations with the same name across a road: both are known
+    ("de:08336:11126:0:1", "Märkt Kirche", "47.6200", "7.6000", ""),
+    ("de:08336:11226:0:1", "Märkt Kirche", "47.6201", "7.6001", ""),
 ]
+GHOST = "de:08226:400582"
+UNKNOWN_TO_EFA = {GHOST}
 ROUTES = [  # id, short name, long name, route_type
     ("r-ice", "ICE", "", "2"), ("r-re5", "RE5", "", "2"),
     ("r-u6", "U6", "", "0"), ("r-u6-back", "U6", "", "0"), ("r-u7", "U7", "", "0"),
@@ -69,8 +77,21 @@ STOP_TIMES = [  # route, stop
     ("r-ship", "de:08315:6232:0:1"),
     ("r-sev", "de:08125:700:0:1"), ("r-sev2", "de:08125:700:0:1"),
     ("r-57", "de:08135:133:0:1"), ("r-57", "de:08135:133:0:2"), ("r-7343", "de:08135:133:0:2"),
+    ("r-7343", "de:08226:582:0:1"), ("r-7343", "de:08226:400582:0:1"),
+    ("r-57", "de:08336:11126:0:1"), ("r-57", "de:08336:11226:0:1"),
 ]
-SERVED = {"de:08111:6115", "de:08111:6113", "de:08111:6114", "de:08315:6232", "de:08125:700", "de:08135:133"}
+SERVED = {"de:08111:6115", "de:08111:6113", "de:08111:6114", "de:08315:6232", "de:08125:700", "de:08135:133",
+          "de:08226:582", "de:08336:11126", "de:08336:11226"}
+TWINS = ["de:08226:400582", "de:08226:582", "de:08336:11126", "de:08336:11226"]
+
+
+def fake_efa(stop_id):
+    """Stands in for the live timetable service in the import."""
+    fake_efa.asked.append(stop_id)
+    return stop_id not in UNKNOWN_TO_EFA
+
+
+fake_efa.asked = []
 
 
 def table(header, rows):
@@ -110,8 +131,9 @@ def write_gtfs(path: Path, change=None) -> Path:
 
 
 def build(zip_path, **options):
-    """importer.build for the tiny file (which has far fewer stations than the real minimum)."""
-    return importer.build(zip_path, store.DB_PATH, **{"min_stations": 1, **options})
+    """importer.build for the tiny file (which has far fewer stations than the
+    real minimum), with a fake timetable service."""
+    return importer.build(zip_path, store.DB_PATH, **{"min_stations": 1, "knows": fake_efa, **options})
 
 
 class StopsDbTestCase(unittest.TestCase):
@@ -220,6 +242,52 @@ class ImportTest(StopsDbTestCase):
         before = self.stations()
         build(self.zip)
         self.assertEqual(self.stations(), before)
+
+
+class GhostTest(StopsDbTestCase):
+    """Stops the file lists twice, under an id the timetable service doesn't know."""
+
+    def test_the_unknown_twin_is_dropped(self):
+        self.assertNotIn(GHOST, self.stations())
+        self.assertIn("de:08226:582", self.stations())
+        self.assertIn("removed 1", self.meta["duplicates"])
+
+    def test_two_real_stations_with_the_same_name_both_stay(self):
+        self.assertIn("de:08336:11126", self.stations())
+        self.assertIn("de:08336:11226", self.stations())
+
+    def test_only_twins_are_asked_about(self):
+        fake_efa.asked.clear()
+        build(self.zip)
+        self.assertEqual(sorted(fake_efa.asked), TWINS)
+
+    def test_service_unreachable_keeps_everything(self):
+        def down(stop_id):
+            raise ConnectionError("no internet")
+        meta = build(self.zip, knows=down)
+        self.assertIn(GHOST, self.stations())
+        self.assertIn("could not check 4", meta["duplicates"])
+
+    def test_if_neither_twin_is_known_both_stay(self):
+        meta = build(self.zip, knows=lambda stop_id: stop_id.startswith("de:08336"))
+        self.assertIn(GHOST, self.stations())
+        self.assertIn("de:08226:582", self.stations())
+        self.assertIn("removed 0", meta["duplicates"])
+
+    def test_check_can_be_switched_off(self):
+        meta = build(self.zip, knows=None)
+        self.assertIn(GHOST, self.stations())
+        self.assertEqual(meta["duplicates"], "not checked")
+
+    def test_twin_candidates(self):
+        def st(sid, name, lat, lon):
+            return (sid, name, lat, lon)
+        found = importer.twin_candidates([
+            st("a", "Gaimühle, Bahnhof", 49.45, 8.98), st("b", "Gaimühle, Bahnhof", 49.45001, 8.98),   # 1 m apart
+            st("c", "Feuerbach", 48.82, 9.17), st("d", "Feuerbach", 47.70, 8.10),                     # 160 km apart
+            st("e", "Rathaus", 48.0, 9.0), st("f", "Kirche", 48.0, 9.0),                              # same spot, other name
+        ])
+        self.assertEqual(found, ["a", "b"])
 
 
 class RulesTest(unittest.TestCase):
@@ -374,8 +442,8 @@ class SafetyTest(StopsDbTestCase):
         self.assert_refused(self.variant("no_rows2", header_only("stop_times.txt")), "only 0 stations")
 
     def test_too_few_stations_for_the_real_minimum(self):
-        # the tiny file has 6 stations; the real file has about 29,000
-        self.assert_refused(self.zip, "only 6 stations", min_stations=importer.MIN_STATIONS)
+        # the tiny file has 9 stations; the real file has about 29,000
+        self.assert_refused(self.zip, f"only {len(SERVED)} stations", min_stations=importer.MIN_STATIONS)
 
     def test_a_big_drop_is_refused(self):
         one_station = self.variant("one", lambda n, t: "\n".join(
@@ -402,7 +470,7 @@ class SafetyTest(StopsDbTestCase):
     def test_failed_first_import_leaves_no_database_behind(self):
         store.DB_PATH = self.folder / "fresh" / "stops.sqlite"
         with self.assertRaises(importer.BadFeed):
-            importer.build(self.zip, store.DB_PATH)  # real minimum: far too few stations
+            importer.build(self.zip, store.DB_PATH, knows=None)  # real minimum: far too few stations
         self.assertFalse(store.DB_PATH.exists())
         with self.assertRaises(store.StopsNotImported):
             store.meta()
@@ -496,7 +564,8 @@ class CommandTest(DownloadTest):
         importer.MIN_STATIONS = 1
         # importer.build reads its default from the function signature
         self.real_build = importer.build
-        importer.build = lambda zip_path, db_path, force=False: self.real_build(zip_path, db_path, min_stations=1, force=force)
+        importer.build = lambda zip_path, db_path, force=False: self.real_build(zip_path, db_path, min_stations=1, force=force,
+                                                                                 knows=fake_efa)
 
     def tearDown(self):
         import_stops.DOWNLOAD_PATH, importer.MIN_STATIONS, sys.argv = self.originals
@@ -514,6 +583,7 @@ class CommandTest(DownloadTest):
         code, said = self.run_command("--file", str(self.zip))
         self.assertEqual(code, 0)
         self.assertIn(f"{len(SERVED)} stations", said)
+        self.assertIn("duplicates: checked 4 possible duplicate stops", said)
         self.assertIn("20260929", said)
 
     def test_download_and_build(self):
@@ -556,7 +626,8 @@ class CommandTest(DownloadTest):
         self.assertEqual(self.stations(), before)
 
     def test_incomplete_file_needs_force(self):
-        importer.build = self.real_build  # the real minimum of 10,000 stations
+        # the real minimum of 10,000 stations
+        importer.build = lambda zip_path, db_path, force=False: self.real_build(zip_path, db_path, force=force, knows=fake_efa)
         code, said = self.run_command("--file", str(self.zip))
         self.assertEqual(code, 1)
         self.assertIn("--force", said)
@@ -645,14 +716,48 @@ class SpreadTest(StopsDbTestCase):
             self.assertLessEqual(len(stops), limit)
             self.assertGreaterEqual(len(stops), 1)
 
+    @staticmethod
+    def sizes(west, east, south, north, limit=150, count=4):
+        candidates = store.cell_sizes(west, east, south, north, limit)
+        return [next(candidates) for _ in range(count)]
+
+    def test_cell_sizes_come_from_a_fixed_ladder(self):
+        sizes = self.sizes(9.00, 9.60, 48.60, 48.95)
+        for size in sizes:
+            # powers of two and the steps half-way between
+            self.assertAlmostEqual((2 * math.log2(size)) % 1, 0)
+        for finer, coarser in zip(sizes, sizes[1:]):
+            self.assertAlmostEqual(coarser / finer, math.sqrt(2))
+
     def test_grid_does_not_move_with_the_map(self):
-        # a power of two, whatever the exact rectangle: panning keeps the cells
-        cell = store.grid_cell(9.00, 9.60, 48.60, 48.95, 150)
-        self.assertEqual(cell, store.grid_cell(9.03, 9.63, 48.62, 48.97, 150))
-        self.assertEqual(math.log2(cell) % 1, 0)
+        # the same view moved a little (panning) uses the same ladder
+        self.assertEqual(self.sizes(9.00, 9.60, 48.60, 48.95), self.sizes(9.03, 9.63, 48.62, 48.97))
         # zooming out makes the cells bigger, zooming in smaller
-        self.assertGreater(store.grid_cell(7.5, 10.5, 47.5, 49.8, 150), cell)
-        self.assertLess(store.grid_cell(9.17, 9.20, 48.79, 48.81, 150), cell)
+        city = self.sizes(9.00, 9.60, 48.60, 48.95)[0]
+        self.assertGreater(self.sizes(7.5, 10.5, 47.5, 49.8)[0], city)
+        self.assertLess(self.sizes(9.17, 9.20, 48.79, 48.81)[0], city)
+
+    def test_first_candidate_is_finer_than_needed(self):
+        # it would hold more cells than the limit, so the search starts on the fine side
+        west, east, south, north, limit = 7.5, 10.5, 47.5, 49.8, 150
+        first = self.sizes(west, east, south, north, limit)[0]
+        cells = ((east - west) / first) * ((north - south) / (first * store.LAT_PER_LON))
+        self.assertGreater(cells, 2 * limit)
+
+    def test_a_slightly_different_view_gives_a_similar_number_of_stations(self):
+        # the statewide map in two window sizes: the count must not jump
+        stations = [(f"de:08111:{i}", f"Stop {i}", 47.6 + (i % 40) * 0.05, 7.6 + (i // 40) * 0.07) for i in range(1600)]
+        db = sqlite3.connect(store.DB_PATH)
+        db.execute("DELETE FROM stations")
+        db.executemany("INSERT INTO stations VALUES (?, ?, ?, ?, 0, 0, 1, 0, 1, 0, 0, ?, 0, ?, ?)",
+                       [(sid, name, lat, lon, i % 97, i % 97, (i % 97) / 10) for i, (sid, name, lat, lon) in enumerate(stations)])
+        db.commit()
+        db.close()
+        counts = [len(store.in_area(*view, 150, spread=True)[0])
+                  for view in ((6.58, 47.25, 11.42, 50.05), (6.59, 47.26, 11.41, 50.04), (6.3, 47.1, 11.7, 50.2))]
+        for count in counts:
+            self.assertGreater(count, 75)      # more than half the limit...
+            self.assertLessEqual(count, 150)   # ...and never above it
 
 
 class AreaApiTest(StopsDbTestCase):
