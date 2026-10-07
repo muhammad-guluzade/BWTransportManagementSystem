@@ -69,6 +69,24 @@ tr:last-child td { border-bottom: none; }
 .minutes { color: #666; text-align: right; white-space: nowrap; width: 1%; }
 tr.cancelled .destination, tr.cancelled .via { text-decoration: line-through; color: #999; }
 tr.cancelled .line-badge { background: #999; }
+/* a click on a departure lists its stops under it */
+tr.departure { cursor: pointer; }
+tr.departure:hover td { background: #f5f8fc; }
+tr.departure.open td { background: #eaf1fa; border-bottom: none; }
+.stops-cell { padding: 6px 12px 12px 24px; background: #f6f9fd; }
+.stops-note { padding: 4px 0; color: #666; font-size: 0.85rem; }
+.stops-earlier { margin: 2px 0 6px; padding: 2px 8px; font: inherit; font-size: 0.8rem; border: 1px solid #b8c7da; border-radius: 4px; background: white; color: #005aa9; cursor: pointer; }
+.stops-earlier:hover { background: #eef; }
+.stops-list { width: auto; min-width: 75%; border-left: 3px solid #005aa9; font-size: 0.88rem; }
+.stops-list td { padding: 3px 10px; border-bottom: none; }
+.stop-time { width: 1%; white-space: nowrap; text-align: right; }
+.stop-time s { color: #999; }
+.stop-name a { color: #005aa9; text-decoration: none; }
+.stop-name a:hover { text-decoration: underline; }
+.stop-platform { color: #888; font-size: 0.8rem; white-space: nowrap; text-align: right; }
+tr.stop.earlier td, tr.stop.earlier a { color: #888; }
+tr.stop.here td { font-weight: bold; border-top: 1px solid #b8c7da; border-bottom: 1px solid #b8c7da; }
+tr.stop.cancelled .stop-name, tr.stop.cancelled .stop-name a { text-decoration: line-through; color: #999; }
 .show-more { display: block; width: 100%; padding: 8px; font: inherit; font-size: 0.9rem; border: none; border-top: 1px solid #eee; background: #f7f7f7; color: #005aa9; cursor: pointer; }
 .show-more:hover { background: #eef; }
 

@@ -48,7 +48,8 @@ Lists the endpoints.
   "endpoints": {
     "search_stops": "/api/v1/stops/search?q={text}",
     "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}",
-    "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}"
+    "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}",
+    "departure_stops": "/api/v1/stops/{stop_id}/departures/{departure_id}/stops"
   },
   "stop_data": {
     "attribution": "Datensatz der NVBW GmbH",
@@ -239,6 +240,7 @@ and one departure)
           "area": null,
           "departures": [
             {
+              "id": "MjAyNi0xMC0wMVQyMjozNDowMFp8ZGU6MDgxMTE6NjExNToyOjJ8ZGRiOjkwUjkwOiA6SDpqMjZ8MTk5MzQ",
               "line": "MEX90",
               "destination": "Crailsheim",
               "via": ["Bad Cannstatt", "Waiblingen"],
@@ -296,6 +298,7 @@ Tab ids: `trains`, `sbahn`, `tram`, `bus`, `ferry`, `cablecar`, `other`.
 
 | Field | |
 |---|---|
+| `id` | Identifies this departure on this station's board. Use it to ask for the departure's stops (next endpoint). It stays the same from one refresh to the next, also when the live time changes. Treat it as an opaque text. |
 | `line` | Line label: `"U7"`, `"RE5"`, `"ICE 1291"`. |
 | `destination` | Where the vehicle is signed to. The town is left out if it is the station's own. |
 | `via` | Up to two major stops on the way, in travel order. Can be empty. |
@@ -330,6 +333,101 @@ a station whose trains are currently replaced by buses from the bus station):
 }
 ```
 
+### `GET /api/v1/stops/{stop_id}/departures/{departure_id}/stops`
+
+The stops of one departure: where the vehicle goes from this station, and
+where it has come from. Meant to be asked for when a user picks a departure
+on the board; the board itself only carries the short `via`.
+
+| Parameter | | |
+|---|---|---|
+| `stop_id` | required | The station whose board the departure is on. |
+| `departure_id` | required | The departure's `id` from that board. |
+
+Example: a U6 at Stuttgart, Pragfriedhof (shortened to one stop per list)
+
+```json
+{
+  "id": "MjAyNi0xMC0wN1QyMTowMDowMFp8ZGU6MDgxMTE6MTE1OjE6MnxzdmU6MjAwMDY6IDpIOmoyNnwyNzQ",
+  "line": "U6",
+  "destination": "Gerlingen",
+  "here": {
+    "id": "de:08111:115",
+    "name": "Pragfriedhof",
+    "lat": 48.79923,
+    "lon": 9.18373,
+    "has_board": true,
+    "platform": {"code": "2", "name": "Platform 2"},
+    "time": "2026-10-07T21:02:00Z",
+    "planned": "2026-10-07T21:00:00Z",
+    "delay": 2,
+    "realtime": true,
+    "cancelled": false
+  },
+  "previous": [
+    {
+      "id": "de:08111:6112",
+      "name": "Hauptbf (Arnulf-Klett-Platz)",
+      "lat": 48.78316,
+      "lon": 9.181124,
+      "has_board": true,
+      "platform": {"code": "2", "name": "Platform 2"},
+      "time": "2026-10-07T20:57:00Z",
+      "planned": "2026-10-07T20:56:00Z",
+      "delay": 1,
+      "realtime": true,
+      "cancelled": false
+    }
+  ],
+  "onward": [
+    {
+      "id": "de:08111:6114",
+      "name": "Löwentorbrücke",
+      "lat": 48.803683,
+      "lon": 9.18354,
+      "has_board": true,
+      "platform": {"code": "2", "name": "Platform 2"},
+      "time": "2026-10-07T21:03:00Z",
+      "planned": "2026-10-07T21:01:00Z",
+      "delay": 2,
+      "realtime": true,
+      "cancelled": false
+    }
+  ]
+}
+```
+
+| Field | |
+|---|---|
+| `id`, `line`, `destination` | As on the board. |
+| `here` | This station, as one stop of the trip. Its `time`, `planned`, `delay`, `realtime` and `cancelled` are the departure's own. |
+| `previous` | The stops the vehicle has come from, in travel order (the first is where the trip started). Empty if the trip starts here. |
+| `onward` | The stops still ahead, in travel order (the last is where the trip ends). Can be empty if the timetable gives none. |
+
+**A stop of a trip** (`here`, `previous[]`, `onward[]`)
+
+| Field | |
+|---|---|
+| `id` | The station's stop id. Use it with the departures endpoint if `has_board` is `true`. |
+| `name` | Station name. The town is left out if it is the town of the station the board belongs to. |
+| `lat`, `lon` | Where the vehicle stops there (the platform if known). `null` if the timetable gives no position. |
+| `has_board` | `true` if the stop is in Baden-Württemberg, so this API has a departure board for it. Stops elsewhere (`"Frankfurt (Main) Hbf"`) are listed, but can't be opened. |
+| `platform` | `code` and `name` as on the board; `code` is `null` and `name` `"Unknown platform"` if the timetable names none (common for bus stops). |
+| `time` | For stops in `onward`: when the vehicle is expected to arrive there. For stops in `previous` and for `here`: when it leaves (or left). The live time if there is one, else the planned time. |
+| `planned` | The planned time. |
+| `delay` | Minutes late (negative = early), or `null` without live data. |
+| `realtime` | `true` if `time` comes from live data. |
+| `cancelled` | `true` if the vehicle doesn't call at this stop. |
+
+Points of a trip where nobody can get on or off (border points of the
+railway, routing points of long-distance buses) are left out, as is this
+station itself if the vehicle comes round to it again.
+
+The board remembers its departures' stops for about ten minutes, so this
+answer normally comes at once. After that the timetable service is asked
+again; once a departure has left and the service no longer lists it, the
+answer is `unknown_departure`.
+
 ## Errors
 
 Errors use the matching HTTP status and always have this shape:
@@ -342,6 +440,7 @@ Errors use the matching HTTP status and always have this shape:
 |---|---|---|
 | 400 | `invalid_parameter` | A parameter is missing or malformed, e.g. `bbox`. The message says which. |
 | 404 | `unknown_stop` | The stop id doesn't exist or is outside Baden-Württemberg. |
+| 404 | `unknown_departure` | The departure id isn't one of this station's, or the departure is no longer in the timetable (it left a while ago). Load the board again. |
 | 404 | `not_found` | No such API address. |
 | 405 | `method_not_allowed` | Anything other than `GET`. |
 | 502 | `timetable_unavailable` | The timetable service behind this API didn't answer. Try again later. |

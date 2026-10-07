@@ -6,8 +6,11 @@ changed in a way that would break it. EFA is replaced by canned responses,
 so the tests need no network."""
 import unittest
 
+from datetime import datetime, timezone
+
 from app import app
-from efa import client
+from efa import client, parse
+from services import departures
 
 STOP = "de:08111:6115"
 NEIGHBOUR = "de:08111:6118"
@@ -20,20 +23,38 @@ STATION = {"locations": [{
     ],
 }]}
 
+def platform_of(stop_id, name, number, coord=None, **times):
+    """A platform of a station the way EFA lists the stops of a trip."""
+    return {"id": f"{stop_id}:1:{number}", "name": name, "type": "platform", "coord": coord,
+            "properties": {"platform": number, "platformName": f"Gleis {number}"},
+            "parent": {"id": stop_id, "name": name, "type": "stop"}, **times}
+
+
 EVENT = {
     "location": {
-        "name": "Stuttgart Hauptbahnhof (oben)", "type": "platform", "properties": {"platformName": "Gleis 3"},
-        "parent": {"name": "Stuttgart Hauptbahnhof (oben)", "type": "stop", "parent": {"name": "Stuttgart", "type": "locality"}},
+        "id": STOP + ":3:3", "name": "Stuttgart Hauptbahnhof (oben)", "type": "platform",
+        "coord": [48.784729, 9.183172], "properties": {"platformName": "Gleis 3"},
+        "parent": {"id": STOP, "name": "Stuttgart Hauptbahnhof (oben)", "type": "stop",
+                   "parent": {"name": "Stuttgart", "type": "locality"}},
     },
     "departureTimePlanned": "2026-10-01T08:00:00Z",
     "departureTimeEstimated": "2026-10-01T08:04:00Z",
     "transportation": {
-        "disassembledName": "RE5", "product": {"class": 13, "name": "R-Bahn"}, "destination": {"name": "Ulm Hauptbahnhof"},
+        "id": "ddb:90T05: :H:j26", "disassembledName": "RE5", "product": {"class": 13, "name": "R-Bahn"},
+        "destination": {"name": "Ulm Hauptbahnhof"}, "properties": {"tripCode": 19005},
     },
+    "previousLocations": [
+        {**platform_of("de:08115:5774", "Böblingen", "2", [48.687, 9.004], departureTimePlanned="2026-10-01T07:38:00Z"),
+         "productClasses": [0, 1, 5]},
+    ],
     "onwardLocations": [
-        {"name": "Plochingen", "productClasses": [0, 1, 5], "parent": {"name": "Plochingen"}},
-        {"name": "Göppingen", "productClasses": [5], "parent": {"name": "Göppingen"}},
-        {"name": "Ulm Hauptbahnhof", "productClasses": [0, 5], "parent": {"name": "Ulm Hauptbahnhof"}},
+        {**platform_of("de:08116:7800", "Plochingen", "4", [48.713, 9.411], arrivalTimePlanned="2026-10-01T08:15:00Z",
+                       arrivalTimeEstimated="2026-10-01T08:18:00Z", departureTimePlanned="2026-10-01T08:16:00Z"),
+         "productClasses": [0, 1, 5]},
+        {**platform_of("de:08117:5000", "Göppingen", "1", [48.699, 9.652], arrivalTimePlanned="2026-10-01T08:30:00Z"),
+         "productClasses": [5]},
+        {**platform_of("de:08421:1008", "Ulm Hauptbahnhof", "2", [48.399, 9.983], arrivalTimePlanned="2026-10-01T09:02:00Z"),
+         "productClasses": [0, 5]},
     ],
 }
 
@@ -64,7 +85,7 @@ class IndexTest(ApiTestCase):
     def test_index_lists_the_endpoints(self):
         body = self.http.get("/api/v1/").get_json()
         self.assertEqual(body["version"], 1)
-        self.assertEqual(set(body["endpoints"]), {"search_stops", "stops_in_area", "departures"})
+        self.assertEqual(set(body["endpoints"]), {"search_stops", "stops_in_area", "departures", "departure_stops"})
 
 
 class SearchTest(ApiTestCase):
@@ -115,10 +136,12 @@ class DeparturesTest(ApiTestCase):
         self.assertEqual((platform["code"], platform["name"], platform["area"]), ("3", "Platform 3", None))
 
         departure = platform["departures"][0]
-        self.assertEqual(list(departure), ["line", "destination", "via", "dticket", "time", "planned", "minutes",
+        self.assertEqual(list(departure), ["id", "line", "destination", "via", "dticket", "time", "planned", "minutes",
                                            "delay", "realtime", "cancelled"])
         minutes = departure.pop("minutes")  # depends on the clock
         self.assertIsInstance(minutes, int)
+        # the id goes into an address, so it must need no escaping
+        self.assertRegex(departure.pop("id"), r"^[A-Za-z0-9_-]+$")
         self.assertEqual(departure, {
             "line": "RE5",
             "destination": "Ulm Hauptbahnhof",
@@ -163,6 +186,139 @@ class DeparturesTest(ApiTestCase):
         client.get_departures = lambda stop_id, classes=(), **kw: {}
         body = self.get().get_json()
         self.assertEqual((body["empty"], body["nearby"]), ("no_service", []))
+
+
+class DepartureStopsTest(ApiTestCase):
+    """The stops of one departure: /stops/{stop}/departures/{id}/stops"""
+
+    def setUp(self):
+        super().setUp()
+        departures._trips.clear()
+        self.requests = []  # every question to the timetable service
+        answer = client.get_departures
+
+        def counted(stop_id, classes=(), **kw):
+            self.requests.append(kw)
+            return answer(stop_id, classes, **kw)
+        client.get_departures = counted
+
+    def tearDown(self):
+        departures._trips.clear()
+        super().tearDown()
+
+    def board_id(self):
+        board = self.http.get(f"/api/v1/stops/{STOP}/departures").get_json()
+        return board["modes"][0]["platforms"][0]["departures"][0]["id"]
+
+    def get(self, departure_id, stop=STOP):
+        return self.http.get(f"/api/v1/stops/{stop}/departures/{departure_id}/stops")
+
+    def test_shape(self):
+        departure_id = self.board_id()
+        res = self.get(departure_id)
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertEqual(list(body), ["id", "line", "destination", "here", "previous", "onward"])
+        self.assertEqual((body["id"], body["line"], body["destination"]), (departure_id, "RE5", "Ulm Hauptbahnhof"))
+        self.assertEqual(body["here"], {
+            "id": STOP, "name": "Hauptbahnhof (oben)", "lat": 48.784729, "lon": 9.183172, "has_board": True,
+            "platform": {"code": "3", "name": "Platform 3"},
+            "time": "2026-10-01T08:04:00Z", "planned": "2026-10-01T08:00:00Z", "delay": 4, "realtime": True,
+            "cancelled": False,
+        })
+        self.assertEqual(body["previous"], [{
+            "id": "de:08115:5774", "name": "Böblingen", "lat": 48.687, "lon": 9.004, "has_board": True,
+            "platform": {"code": "2", "name": "Platform 2"},
+            "time": "2026-10-01T07:38:00Z", "planned": "2026-10-01T07:38:00Z", "delay": None, "realtime": False,
+            "cancelled": False,
+        }])
+        self.assertEqual([stop["name"] for stop in body["onward"]], ["Plochingen", "Göppingen", "Ulm Hauptbahnhof"])
+        # stops ahead carry the time the vehicle gets there
+        self.assertEqual(body["onward"][0], {
+            "id": "de:08116:7800", "name": "Plochingen", "lat": 48.713, "lon": 9.411, "has_board": True,
+            "platform": {"code": "4", "name": "Platform 4"},
+            "time": "2026-10-01T08:18:00Z", "planned": "2026-10-01T08:15:00Z", "delay": 3, "realtime": True,
+            "cancelled": False,
+        })
+
+    def test_the_row_and_its_stops_agree(self):
+        board = self.http.get(f"/api/v1/stops/{STOP}/departures").get_json()
+        row = board["modes"][0]["platforms"][0]["departures"][0]
+        trip = self.get(row["id"]).get_json()
+        for field in ("time", "planned", "delay", "realtime", "cancelled"):
+            self.assertEqual(trip["here"][field], row[field], field)
+        names = [stop["name"] for stop in trip["onward"]]
+        self.assertEqual([name for name in names if name in row["via"]], row["via"])
+
+    def test_answered_from_memory_after_a_board(self):
+        departure_id = self.board_id()
+        asked = len(self.requests)
+        self.assertEqual(self.get(departure_id).status_code, 200)
+        self.assertEqual(len(self.requests), asked)
+
+    def test_asks_the_timetable_service_when_not_remembered(self):
+        departure_id = self.board_id()
+        remembered = self.get(departure_id).get_json()
+        departures._trips.clear()  # as after a restart of the server
+        asked = len(self.requests)
+        res = self.get(departure_id)
+        self.assertEqual((res.status_code, res.get_json()), (200, remembered))
+        self.assertEqual(len(self.requests), asked + 1)
+        # it looks around the departure's planned time
+        self.assertEqual(self.requests[-1]["start"], datetime(2026, 10, 1, 7, 59, tzinfo=timezone.utc))
+        # ... and remembers the answer
+        self.get(departure_id)
+        self.assertEqual(len(self.requests), asked + 1)
+
+    def test_forgotten_after_a_while(self):
+        departure_id = self.board_id()
+        expires, trip = departures._trips[departure_id]
+        departures._trips[departure_id] = (expires - departures.TRIP_TTL - 1, trip)
+        asked = len(self.requests)
+        self.assertEqual(self.get(departure_id).status_code, 200)
+        self.assertEqual(len(self.requests), asked + 1)
+
+    def test_memory_is_limited(self):
+        for number in range(departures.TRIP_MEMORY + 5):
+            departures.remember_trip({"id": str(number)})
+        self.assertEqual(len(departures._trips), departures.TRIP_MEMORY)
+        self.assertNotIn("4", departures._trips)   # the oldest went
+        self.assertIn("5", departures._trips)
+
+    def assert_unknown(self, res):
+        self.assertEqual(res.status_code, 404)
+        self.assertEqual(res.get_json()["error"]["code"], "unknown_departure")
+
+    def test_unknown_departure(self):
+        self.board_id()
+        self.assert_unknown(self.get("nonsense"))
+        self.assert_unknown(self.get("%20"))
+        # well-formed, but no such departure in the timetable
+        other = parse.departure_id({**EVENT, "departureTimePlanned": "2026-10-01T09:00:00Z"})
+        self.assert_unknown(self.get(other))
+
+    def test_departure_of_another_station(self):
+        departure_id = self.board_id()
+        self.assert_unknown(self.get(departure_id, stop=NEIGHBOUR))   # remembered, but not there
+        departures._trips.clear()
+        self.assert_unknown(self.get(departure_id, stop=NEIGHBOUR))   # not remembered either
+        self.assert_unknown(self.get(departure_id, stop="de:08111:61"))  # an id that only starts the same
+
+    def test_timetable_service_down(self):
+        departure_id = self.board_id()
+        departures._trips.clear()
+
+        def down(*args, **kwargs):
+            raise client.EfaError("timeout")
+        client.get_departures = down
+        res = self.get(departure_id)
+        self.assertEqual((res.status_code, res.get_json()["error"]["code"]), (502, "timetable_unavailable"))
+
+    def test_excluded_services_have_no_stops(self):
+        # a flight is not on any board, so its id must not open either
+        flight = {**EVENT, "transportation": {**EVENT["transportation"], "product": {"class": 12, "name": "Flugzeug"}}}
+        self.events = [flight]
+        self.assert_unknown(self.get(parse.departure_id(flight)))
 
 
 class ErrorTest(ApiTestCase):

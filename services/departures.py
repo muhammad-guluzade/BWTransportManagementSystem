@@ -2,6 +2,8 @@
 (tab), grouped by mode, then by platform within each mode."""
 import logging
 import re
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -34,8 +36,21 @@ LOOK_AHEAD_STEP = timedelta(hours=23)
 LOOK_AHEAD_STEPS = 7
 
 
+# The stops of each departure of a board are remembered for a while, so that
+# asking for them (a click on a departure) needs no further request to EFA.
+# A page refreshes its board every 30 seconds, which renews them.
+TRIP_TTL = 600           # seconds
+TRIP_MEMORY = 3000       # departures; the oldest are dropped beyond this
+_trips = {}              # departure id -> (expires_at, trip)
+_trips_lock = threading.Lock()
+
+
 class UnknownStop(Exception):
     """EFA has no stop with this id."""
+
+
+class UnknownDeparture(Exception):
+    """This departure can't be found (any more)."""
 
 
 def mode_sort_key(name: str):
@@ -63,9 +78,49 @@ def parse_events(events) -> list:
             # without a departure time there is nothing to show
             if departure["time"]:
                 departures.append(departure)
+                remember_trip(parse.parse_trip(event))
         except Exception:  # noqa: BLE001 -- whatever EFA sent, skip just this row
             log.warning("Skipping a departure that could not be read", exc_info=True)
     return departures
+
+
+def remember_trip(trip: dict) -> None:
+    now = time.monotonic()
+    with _trips_lock:
+        _trips.pop(trip["id"], None)   # re-insert, so the dict stays ordered by age
+        _trips[trip["id"]] = (now + TRIP_TTL, trip)
+        while len(_trips) > TRIP_MEMORY:
+            del _trips[next(iter(_trips))]
+
+
+def trip(stop_id: str, departure_id: str) -> dict:
+    """The stops of one departure of a station's board:
+    {id, line, destination, here, previous: [...], onward: [...]}.
+
+    Normally answered from memory. If the departure isn't remembered (the
+    board was loaded long ago, or the server restarted), EFA is asked once
+    for the departures around its planned time."""
+    with _trips_lock:
+        remembered = _trips.get(departure_id)
+    # a departure belongs to one station: under another station's address it is unknown
+    if remembered and remembered[0] > time.monotonic() and remembered[1]["here"]["id"] == stop_id:
+        return remembered[1]
+
+    wanted = parse.decode_departure_id(departure_id)
+    # the id says which platform it leaves from; that must be one of this station's
+    if not wanted or not parse.in_baden_wuerttemberg(stop_id) or not (wanted["platform_id"] + ":").startswith(stop_id + ":"):
+        raise UnknownDeparture(departure_id)
+    data = client.get_departures(stop_id, (), start=wanted["planned"] - timedelta(minutes=1))
+    for event in data.get("stopEvents") or []:
+        try:
+            if parse.departure_id(event) == departure_id and not parse.is_excluded(event):
+                found = parse.parse_trip(event)
+                if found["here"]["id"] == stop_id:
+                    remember_trip(found)
+                    return found
+        except Exception:  # noqa: BLE001 -- an unreadable event is not the one we want
+            continue
+    raise UnknownDeparture(departure_id)
 
 
 def dedupe(departures: list) -> list:

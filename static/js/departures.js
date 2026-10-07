@@ -27,6 +27,14 @@ let selectedFrom = null;       // where the current stop was picked: 'search', '
 let announced = true;          // the map has been told about the current stop
 const shownCount = new Map();  // platform -> how many departures it shows (after "Show more" clicks)
 
+// the departure whose stops are listed under its row (one at a time)
+let openDeparture = null;      // its id
+let openTrip = null;           // the API's answer for it; null while it loads
+let openTripUrl = '';          // the API address openTrip came from
+let openTripError = '';
+let showEarlier = false;       // the stops it has come from are shown as well
+let openShown = false;         // its row was found while drawing the board
+
 // departure times arrive in UTC; show them in local German time
 const timeFormat = new Intl.DateTimeFormat('de-DE', {
   hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin',
@@ -97,6 +105,7 @@ function selectStop(id, name, source = 'search') {
   announced = false;
   currentTab = '';
   shownCount.clear();
+  closeStops();
   stationBox.innerHTML = '';
   board.innerHTML = '';
   rawBox.innerHTML = '';
@@ -110,6 +119,7 @@ function selectStop(id, name, source = 'search') {
 function selectTab(tabId) {
   currentTab = tabId;
   shownCount.clear();
+  closeStops();
   board.innerHTML = '';
   status.textContent = 'Loading...';
   loadDepartures();
@@ -134,6 +144,8 @@ async function loadDepartures() {
   lastUrl = url;
   currentTab = lastData.tab || '';
   render();
+  // an open list of stops gets fresh times together with the board
+  if (openDeparture) loadStops();
   if (!announced) {
     // tell the map which stop is shown now (once per selection, not per refresh)
     announced = true;
@@ -144,9 +156,62 @@ async function loadDepartures() {
 }
 
 function render() {
+  openShown = false;
   renderStation(lastData);
   renderBoard(lastData);
+  // the departure whose stops were open is no longer on the board (it has left)
+  if (openDeparture && !openShown) closeStops();
   renderRaw();
+}
+
+function closeStops() {
+  openDeparture = null;
+  openTrip = null;
+  openTripUrl = '';
+  openTripError = '';
+  showEarlier = false;
+}
+
+// a click on a departure lists its stops under it; a second click closes the list
+function toggleStops(dep) {
+  if (openDeparture === dep.id) {
+    closeStops();
+    render();
+    return;
+  }
+  closeStops();
+  openDeparture = dep.id;
+  render();
+  loadStops();
+}
+
+async function loadStops() {
+  const id = openDeparture;
+  const stopId = currentStopId;
+  const url = `${API}/stops/${encodeURIComponent(stopId)}/departures/${encodeURIComponent(id)}/stops`;
+  const current = () => id === openDeparture && stopId === currentStopId;
+  let res;
+  try {
+    res = await fetch(url);
+  } catch {
+    // keep a list that is already shown; only a first load has nothing to show
+    if (current() && !openTrip) { openTripError = 'Could not load the stops.'; render(); }
+    return;
+  }
+  if (!current()) return;  // the user has moved on
+  if (!res.ok) {
+    const message = await errorMessage(res, 'Could not load the stops.');
+    if (!current()) return;
+    openTrip = null;
+    openTripError = message;
+  } else {
+    const trip = await res.json();
+    if (!current()) return;
+    openTrip = trip;
+    openTripUrl = url;
+    openTripError = '';
+  }
+  render();
 }
 
 // "Show API response": the exact JSON this page was built from, for
@@ -165,6 +230,17 @@ function renderRaw() {
   source.appendChild(link);
   rawBox.appendChild(source);
   rawBox.appendChild(el('pre', 'raw-json', JSON.stringify(lastData, null, 2)));
+
+  if (openTrip) {
+    // the stops of the departure that is open come from a request of their own
+    const tripSource = el('div', 'raw-url', 'GET ');
+    const tripLink = el('a', '', openTripUrl);
+    tripLink.href = openTripUrl;
+    tripLink.target = '_blank';
+    tripSource.appendChild(tripLink);
+    rawBox.appendChild(tripSource);
+    rawBox.appendChild(el('pre', 'raw-json raw-trip', JSON.stringify(openTrip, null, 2)));
+  }
 }
 
 // a link that opens another station
@@ -213,8 +289,82 @@ function dayLabel(dep) {
   return `${weekdayFormat.format(when)} ${dateFormat.format(when)}`;
 }
 
+// the time of a departure or of one stop of a trip: late = planned time
+// crossed out, then the new time
+function fillTime(cell, item) {
+  if (item.cancelled) {
+    cell.appendChild(el('s', '', formatTime(item.planned || item.time)));
+    cell.appendChild(el('span', 'late', ' Cancelled'));
+  } else if (item.delay >= 1) {
+    cell.appendChild(el('s', '', formatTime(item.planned)));
+    cell.appendChild(document.createTextNode(' '));
+    cell.appendChild(el('span', 'late', formatTime(item.time)));
+  } else {
+    cell.appendChild(document.createTextNode(formatTime(item.time)));
+  }
+}
+
+// one stop of the open departure's trip; `kind` is 'earlier', 'here' or ''
+function renderStop(stop, kind) {
+  const row = el('tr', ['stop', kind, stop.cancelled ? 'cancelled' : ''].filter(Boolean).join(' '));
+  const timeCell = el('td', 'stop-time');
+  fillTime(timeCell, stop);
+  row.appendChild(timeCell);
+
+  const nameCell = el('td', 'stop-name');
+  // stops in Baden-Württemberg have a board of their own; the others are just named
+  if (stop.has_board && kind !== 'here') nameCell.appendChild(stopLink(stop));
+  else nameCell.textContent = stop.name;
+  row.appendChild(nameCell);
+
+  row.appendChild(el('td', 'stop-platform', stop.platform.code ? stop.platform.name : ''));
+  return row;
+}
+
+// the row under an open departure: the stops still ahead, and on request the
+// ones the vehicle has come from
+function renderStops() {
+  const row = el('tr', 'stops-row');
+  const cell = el('td', 'stops-cell');
+  cell.colSpan = 4;
+  row.appendChild(cell);
+
+  if (openTripError) {
+    cell.appendChild(el('div', 'stops-note', openTripError));
+    return row;
+  }
+  if (!openTrip) {
+    cell.appendChild(el('div', 'stops-note', 'Loading stops...'));
+    return row;
+  }
+
+  const trip = openTrip;
+  if (trip.previous.length) {
+    const count = trip.previous.length;
+    const label = showEarlier ? 'Hide earlier stops' : `Show ${count} earlier ${count === 1 ? 'stop' : 'stops'}`;
+    const earlier = el('button', 'stops-earlier', label);
+    earlier.onclick = () => { showEarlier = !showEarlier; render(); };
+    cell.appendChild(earlier);
+  }
+
+  const list = el('table', 'stops-list');
+  if (showEarlier) {
+    trip.previous.forEach(stop => list.appendChild(renderStop(stop, 'earlier')));
+    // this station, as the line between where it came from and where it goes
+    list.appendChild(renderStop(trip.here, 'here'));
+  }
+  trip.onward.forEach(stop => list.appendChild(renderStop(stop, '')));
+  if (list.rows.length) cell.appendChild(list);
+  if (!trip.onward.length) cell.appendChild(el('div', 'stops-note', 'No further stops are known for this departure.'));
+  return row;
+}
+
 function renderDeparture(dep) {
   const row = el('tr', dep.cancelled ? 'cancelled' : '');
+  row.classList.add('departure');
+  if (dep.id === openDeparture) row.classList.add('open');
+  row.title = dep.id === openDeparture ? 'Hide the stops' : 'Show the stops';
+  row.onclick = () => toggleStops(dep);
 
   const lineCell = el('td', 'line-cell');
   lineCell.appendChild(el('span', 'line-badge', dep.line));
@@ -234,17 +384,7 @@ function renderDeparture(dep) {
   const timeCell = el('td', 'time');
   const day = dayLabel(dep);
   if (day) timeCell.appendChild(el('span', 'day', day + ' '));
-  if (dep.cancelled) {
-    timeCell.appendChild(el('s', '', formatTime(dep.planned || dep.time)));
-    timeCell.appendChild(el('span', 'late', ' Cancelled'));
-  } else if (dep.delay >= 1) {
-    // late: planned time crossed out, then the new time
-    timeCell.appendChild(el('s', '', formatTime(dep.planned)));
-    timeCell.appendChild(document.createTextNode(' '));
-    timeCell.appendChild(el('span', 'late', formatTime(dep.time)));
-  } else {
-    timeCell.appendChild(document.createTextNode(formatTime(dep.time)));
-  }
+  fillTime(timeCell, dep);
   row.appendChild(timeCell);
 
   const hasMinutes = !dep.cancelled && dep.minutes !== null && dep.minutes !== undefined;
@@ -270,7 +410,13 @@ function renderPlatform(mode, platform) {
   const hidden = platform.departures.length - count;
 
   const table = el('table');
-  platform.departures.slice(0, count).forEach(dep => table.appendChild(renderDeparture(dep)));
+  platform.departures.slice(0, count).forEach(dep => {
+    table.appendChild(renderDeparture(dep));
+    if (dep.id === openDeparture && !openShown) {
+      openShown = true;
+      table.appendChild(renderStops());
+    }
+  });
   block.appendChild(table);
 
   if (hidden > 0) {

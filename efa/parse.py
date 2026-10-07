@@ -5,6 +5,8 @@ Everything that depends on EFA's field names or regional quirks lives here,
 so a change on EFA's side only needs fixing in this file. The rules were
 checked against real responses with `python debug_efa.py --survey`.
 """
+import base64
+import binascii
 import re
 from datetime import datetime, timezone
 
@@ -254,9 +256,24 @@ def short_name(name: str, city: str) -> str:
     return name
 
 
+# Points of a trip that are not places to get on or off: the routing points of
+# long-distance buses ("Heidelberg, Post Waypoint") and the railway's border
+# points ("Schöna (Gr)").
+NOT_A_STOP = re.compile(r"(Waypoint|\(Gr\))$")
+
+
+def station_of(location: dict) -> dict:
+    """The station a location of a trip stands for. Most are platforms, with
+    the station as their parent; some are stations themselves, and their
+    parent is the town."""
+    parent = location.get("parent") or {}
+    if not parent or location.get("type") == "stop" or parent.get("type") == "locality":
+        return location
+    return parent
+
+
 def onward_name(onward_location: dict) -> str:
-    # onward entries are usually platforms; the stop name lives on the parent
-    return (onward_location.get("parent") or {}).get("name") or onward_location.get("name") or ""
+    return station_of(onward_location).get("name") or onward_location.get("name") or ""
 
 
 def stop_score(onward_location: dict) -> int:
@@ -291,7 +308,7 @@ def via_stops(event: dict, horizon: int = 8, count: int = 2) -> list:
     stops = []  # (name, score), de-duplicated, in travel order
     for o in event.get("onwardLocations") or []:
         name = onward_name(o)
-        if not name or name == here_name or any(name == n for n, _ in stops):
+        if not name or name == here_name or NOT_A_STOP.search(name) or any(name == n for n, _ in stops):
             continue
         stops.append((name, stop_score(o)))
     stops = stops[:-1]  # the last stop is the destination, already shown on the row
@@ -329,6 +346,97 @@ def whole_minutes(delta) -> int:
     return int(delta.total_seconds() / 60)
 
 
+def departure_id(event: dict) -> str:
+    """An id for one departure of a board, to ask for its stops later.
+
+    It is made of what identifies the trip at this platform (planned time,
+    platform, line, EFA's trip number), so it stays the same from one refresh
+    to the next, and it can be decoded again to look the trip up in EFA."""
+    transportation = event.get("transportation") or {}
+    parts = (
+        event.get("departureTimePlanned") or "",
+        (event.get("location") or {}).get("id") or "",
+        transportation.get("id") or "",
+        str((transportation.get("properties") or {}).get("tripCode", "")),
+    )
+    return base64.urlsafe_b64encode("|".join(parts).encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def decode_departure_id(token: str) -> dict | None:
+    """{planned, platform_id} out of a departure id, or None if it isn't one."""
+    try:
+        text = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)).decode("utf-8")
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return None
+    parts = text.split("|")
+    planned = parse_time(parts[0]) if len(parts) == 4 else None
+    if not planned or not parts[1]:
+        return None
+    return {"planned": planned, "platform_id": parts[1]}
+
+
+def trip_stop(location: dict, city: str, arriving: bool) -> dict:
+    """One stop of a trip. `arriving` picks the time shown: when the vehicle
+    gets there (stops still ahead) or when it left (stops behind)."""
+    station = station_of(location)
+    first, second = ("arrival", "departure") if arriving else ("departure", "arrival")
+    planned = parse_time(location.get(f"{first}TimePlanned") or location.get(f"{second}TimePlanned"))
+    estimated = parse_time(location.get(f"{first}TimeEstimated") or location.get(f"{second}TimeEstimated"))
+    lat, lon = lat_lon(location.get("coord"))
+    code = platform_code(location)
+    stop_id = station.get("id") or ""
+    return {
+        "id": stop_id,
+        "name": short_name(station.get("name") or location.get("name") or "", city),
+        "lat": lat,
+        "lon": lon,
+        # can this stop be opened in the departures endpoint (it is in Baden-Württemberg)?
+        "has_board": in_baden_wuerttemberg(stop_id),
+        "platform": {"code": code, "name": f"Platform {code}" if code else UNKNOWN_PLATFORM},
+        "time": iso(estimated or planned),
+        "planned": iso(planned),
+        "delay": whole_minutes(estimated - planned) if estimated and planned else None,
+        "realtime": estimated is not None,
+        "cancelled": location.get("isCancelled") is True,
+    }
+
+
+def trip_stops(locations, city: str, arriving: bool, skip: str = "") -> list:
+    """The stops of a trip before or after this station, in travel order,
+    without repeats and without this station itself."""
+    stops = []
+    for location in locations if isinstance(locations, list) else []:
+        stop = trip_stop(location, city, arriving)
+        if not stop["name"] or NOT_A_STOP.search(stop["name"]) or stop["id"] == skip:
+            continue
+        if stops and stops[-1]["id"] == stop["id"]:
+            continue
+        stops.append(stop)
+    return stops
+
+
+def parse_trip(event: dict) -> dict:
+    """One departure with all the stops of its trip:
+    {id, line, destination, here, previous: [...], onward: [...]}.
+    `previous` are the stops the vehicle has come from, `onward` the ones
+    still ahead, both in travel order; `here` is this station."""
+    location = event.get("location") or {}
+    transportation = event.get("transportation") or {}
+    city = locality(location)
+    here = trip_stop({**location,
+                      "departureTimePlanned": event.get("departureTimePlanned"),
+                      "departureTimeEstimated": event.get("departureTimeEstimated"),
+                      "isCancelled": event.get("isCancelled")}, city, arriving=False)
+    return {
+        "id": departure_id(event),
+        "line": line_name(transportation),
+        "destination": short_name((transportation.get("destination") or {}).get("name") or "?", city),
+        "here": here,
+        "previous": trip_stops(event.get("previousLocations"), city, arriving=False, skip=here["id"]),
+        "onward": trip_stops(event.get("onwardLocations"), city, arriving=True, skip=here["id"]),
+    }
+
+
 def parse_departure(event: dict, now: datetime | None = None) -> dict:
     """One stop event as a flat dict the rest of the app works with."""
     now = now or datetime.now(timezone.utc)
@@ -343,6 +451,7 @@ def parse_departure(event: dict, now: datetime | None = None) -> dict:
     destination = short_name((transportation.get("destination") or {}).get("name") or "?", city)
 
     return {
+        "id": departure_id(event),
         "mode": mode_group(transportation),
         "platform": platform_label(location),
         "platform_code": platform_code(location),

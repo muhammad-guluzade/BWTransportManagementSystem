@@ -34,6 +34,11 @@ def unknown_stop(exc):
     return error(404, "unknown_stop", "This stop could not be found.")
 
 
+@bp.errorhandler(departures.UnknownDeparture)
+def unknown_departure(exc):
+    return error(404, "unknown_departure", "This departure is no longer available.")
+
+
 @bp.errorhandler(stops.InvalidArea)
 def invalid_area(exc):
     return error(400, "invalid_parameter", str(exc))
@@ -54,6 +59,7 @@ def index():
             "search_stops": "/api/v1/stops/search?q={text}",
             "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}",
             "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}",
+            "departure_stops": "/api/v1/stops/{stop_id}/departures/{departure_id}/stops",
         },
         # null until the stop database has been built (python import_stops.py)
         "stop_data": stops.data_info(),
@@ -74,3 +80,8 @@ def search_stops():
 @bp.route("/stops/<stop_id>/departures")
 def stop_departures(stop_id):
     return jsonify(departures.board(stop_id.strip(), request.args.get("tab", "")))
+
+
+@bp.route("/stops/<stop_id>/departures/<departure_id>/stops")
+def departure_stops(stop_id, departure_id):
+    return jsonify(departures.trip(stop_id.strip(), departure_id.strip()))

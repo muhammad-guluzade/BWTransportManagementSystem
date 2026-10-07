@@ -162,6 +162,20 @@ class ViaStopsTest(unittest.TestCase):
         event = self.event(("Stadtbibliothek", [3, 5]), ("Pragsattel", [3]), ("Hauptbahnhof", [0, 1, 3, 5]))
         self.assertEqual(parse.via_stops(event), ["Stadtbibliothek", "Pragsattel"])
 
+    def test_station_without_platforms_keeps_its_own_name(self):
+        # long-distance stops often come as the station itself, with the town
+        # as its parent; the town's name alone ("Freiburg im Breisgau") is not the stop
+        def station(name, town, classes):
+            return {"name": name, "type": "stop", "productClasses": classes, "parent": {"name": town, "type": "locality"}}
+        event = {"location": platform("Gleis 1"), "onwardLocations": [
+            station("Mannheim, Hauptbahnhof", "Mannheim", [0, 5, 13]),
+            station("Heidelberg, Post Waypoint", "Heidelberg", [7]),
+            station("Emmerich (Gr)", "Emmerich", [0, 13]),
+            station("Frankfurt (Main) Hbf", "Frankfurt am Main", [0, 13]),
+            station("Dortmund Hbf", "Dortmund", [0, 13]),
+        ]}
+        self.assertEqual(parse.via_stops(event), ["Mannheim, Hauptbahnhof", "Frankfurt (Main) Hbf"])
+
 
 class StopSearchTest(unittest.TestCase):
     POINT = {
@@ -334,6 +348,118 @@ class ParseDepartureTest(unittest.TestCase):
         self.assertIsNone(dep["minutes"])
         self.assertFalse(dep["dticket"])
         self.assertFalse(dep["cancelled"])
+
+
+class TripTest(unittest.TestCase):
+    """A departure's id, and the stops of its trip."""
+
+    def stop(self, stop_id, name, number="", kind="platform", **times):
+        location = {"id": f"{stop_id}:1:1", "name": name, "type": "platform", "coord": [48.8, 9.2],
+                    "properties": {"platform": number} if number else {},
+                    "parent": {"id": stop_id, "name": name, "type": "stop"}, **times}
+        if kind == "stop":  # the station itself, its parent is the town
+            location.update(id=stop_id, type="stop", parent={"name": name.split(",")[0], "type": "locality"})
+        return location
+
+    def event(self, **changes):
+        event = {
+            "location": {**platform("Gleis 2"), "id": "de:08111:115:1:2", "coord": [48.80, 9.18]},
+            "departureTimePlanned": "2026-10-01T08:00:00Z",
+            "departureTimeEstimated": "2026-10-01T08:03:00Z",
+            "transportation": {**transport(3, "Stadtbahn", tripCode=77), "id": "vvs:20006: :H:j26",
+                               "disassembledName": "U6", "destination": {"name": "Gerlingen"}},
+            "previousLocations": [
+                self.stop("de:08111:6112", "Stuttgart, Hauptbf (A.-Klett-Pl.)", "2",
+                          arrivalTimePlanned="2026-10-01T07:55:00Z", departureTimePlanned="2026-10-01T07:56:00Z"),
+            ],
+            "onwardLocations": [
+                self.stop("de:08111:6114", "Stuttgart, Löwentorbrücke", "2", arrivalTimePlanned="2026-10-01T08:01:00Z",
+                          arrivalTimeEstimated="2026-10-01T08:04:00Z", departureTimePlanned="2026-10-01T08:02:00Z"),
+                self.stop("de:08111:6114", "Stuttgart, Löwentorbrücke", "2", arrivalTimePlanned="2026-10-01T08:01:00Z"),
+                self.stop("de:08111:35", "Stuttgart, Pragsattel", arrivalTimePlanned="2026-10-01T08:03:00Z"),
+                self.stop("de:08115:7100", "Gerlingen", "1", departureTimePlanned="2026-10-01T08:25:00Z"),
+            ],
+        }
+        event["location"]["parent"]["id"] = "de:08111:115"
+        event.update(changes)
+        return event
+
+    def test_id_is_stable_and_tells_departures_apart(self):
+        event = self.event()
+        departure_id = parse.departure_id(event)
+        self.assertEqual(departure_id, parse.departure_id(self.event()))
+        self.assertRegex(departure_id, r"^[A-Za-z0-9_-]+$")
+        # a live time arriving later must not change the id
+        self.assertEqual(departure_id, parse.departure_id(self.event(departureTimeEstimated="2026-10-01T08:09:00Z")))
+        later = self.event(departureTimePlanned="2026-10-01T08:10:00Z")
+        other_platform = self.event(location={**event["location"], "id": "de:08111:115:1:1"})
+        other_trip = self.event(transportation={**event["transportation"], "properties": {"tripCode": 78}})
+        other_line = self.event(transportation={**event["transportation"], "id": "vvs:20007: :H:j26"})
+        ids = {parse.departure_id(e) for e in (event, later, other_platform, other_trip, other_line)}
+        self.assertEqual(len(ids), 5)
+        self.assertEqual(parse.parse_departure(event)["id"], departure_id)
+
+    def test_id_can_be_read_back(self):
+        wanted = parse.decode_departure_id(parse.departure_id(self.event()))
+        self.assertEqual(wanted, {"planned": datetime(2026, 10, 1, 8, 0, tzinfo=timezone.utc),
+                                  "platform_id": "de:08111:115:1:2"})
+
+    def test_anything_else_is_not_an_id(self):
+        for junk in ("", "nonsense", "!!!", "ä", "YXxi", "MjAyNi0xMC0wMVQwODowMDowMFp8fHw", "x" * 500):
+            self.assertIsNone(parse.decode_departure_id(junk), junk)
+
+    def test_stops_ahead_show_the_arrival(self):
+        stops = parse.parse_trip(self.event())["onward"]
+        self.assertEqual([s["name"] for s in stops], ["Löwentorbrücke", "Pragsattel", "Gerlingen"])  # no repeat
+        self.assertEqual(stops[0], {
+            "id": "de:08111:6114", "name": "Löwentorbrücke", "lat": 48.8, "lon": 9.2, "has_board": True,
+            "platform": {"code": "2", "name": "Platform 2"},
+            "time": "2026-10-01T08:04:00Z", "planned": "2026-10-01T08:01:00Z", "delay": 3, "realtime": True,
+            "cancelled": False,
+        })
+        # no platform, no live time
+        self.assertEqual(stops[1]["platform"], {"code": None, "name": "Unknown platform"})
+        self.assertEqual((stops[1]["time"], stops[1]["delay"], stops[1]["realtime"]), ("2026-10-01T08:03:00Z", None, False))
+        # only a departure time is known: better than none
+        self.assertEqual(stops[2]["time"], "2026-10-01T08:25:00Z")
+
+    def test_stops_behind_show_the_departure(self):
+        stops = parse.parse_trip(self.event())["previous"]
+        self.assertEqual([(s["name"], s["time"]) for s in stops], [("Hauptbf (A.-Klett-Pl.)", "2026-10-01T07:56:00Z")])
+
+    def test_this_station(self):
+        trip = parse.parse_trip(self.event())
+        self.assertEqual(list(trip), ["id", "line", "destination", "here", "previous", "onward"])
+        self.assertEqual((trip["line"], trip["destination"]), ("U6", "Gerlingen"))
+        here = trip["here"]
+        self.assertEqual((here["id"], here["name"], here["platform"]["code"]), ("de:08111:115", "Pragfriedhof", "2"))
+        self.assertEqual((here["time"], here["planned"], here["delay"]), ("2026-10-01T08:03:00Z", "2026-10-01T08:00:00Z", 3))
+        self.assertFalse(here["cancelled"])
+        self.assertTrue(parse.parse_trip(self.event(isCancelled=True))["here"]["cancelled"])
+
+    def test_ring_line_does_not_list_this_station_again(self):
+        round_trip = self.event()
+        round_trip["onwardLocations"].append(self.stop("de:08111:115", "Stuttgart, Pragfriedhof", "2"))
+        self.assertNotIn("Pragfriedhof", [s["name"] for s in parse.parse_trip(round_trip)["onward"]])
+
+    def test_stops_outside_the_state_and_points_that_are_no_stops(self):
+        event = self.event(onwardLocations=[
+            self.stop("de:08222:2417", "Mannheim, Hauptbahnhof", kind="stop", arrivalTimePlanned="2026-10-01T09:00:00Z"),
+            self.stop("de:08221:11991", "Heidelberg, Post Waypoint", kind="stop"),
+            self.stop("de:05154:31503", "Emmerich, Emmerich (Gr)", kind="stop"),
+            self.stop("de:06412:10", "Frankfurt (Main) Hauptbahnhof", arrivalTimePlanned="2026-10-01T09:40:00Z"),
+            self.stop("80020798", "Amsterdam Centraal", kind="stop", arrivalTimePlanned="2026-10-01T13:00:00Z"),
+        ])
+        stops = parse.parse_trip(event)["onward"]
+        self.assertEqual([(s["id"], s["name"], s["has_board"]) for s in stops], [
+            ("de:08222:2417", "Mannheim, Hauptbahnhof", True),   # the station, not just "Mannheim"
+            ("de:06412:10", "Frankfurt (Main) Hauptbahnhof", False),
+            ("80020798", "Amsterdam Centraal", False),
+        ])
+
+    def test_a_trip_without_stop_lists(self):
+        trip = parse.parse_trip(self.event(previousLocations=None, onwardLocations={}))
+        self.assertEqual((trip["previous"], trip["onward"]), ([], []))
 
 
 class GroupingTest(unittest.TestCase):
