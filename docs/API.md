@@ -147,7 +147,8 @@ Example: `/api/v1/stops?bbox=9.10,48.74,9.26,48.83&limit=3` (central Stuttgart)
       "lat": 48.78523,
       "lon": 9.183086,
       "lines": 32,
-      "kinds": ["rail", "urban_rail"]
+      "kinds": ["rail", "urban_rail"],
+      "modes": ["rail", "ubahn"]
     },
     {
       "id": "de:08111:6112",
@@ -155,7 +156,8 @@ Example: `/api/v1/stops?bbox=9.10,48.74,9.26,48.83&limit=3` (central Stuttgart)
       "lat": 48.783124,
       "lon": 9.181263,
       "lines": 34,
-      "kinds": ["rail", "urban_rail", "bus"]
+      "kinds": ["rail", "urban_rail", "bus"],
+      "modes": ["rail", "ubahn", "bus"]
     },
     {
       "id": "de:08111:6333",
@@ -163,7 +165,8 @@ Example: `/api/v1/stops?bbox=9.10,48.74,9.26,48.83&limit=3` (central Stuttgart)
       "lat": 48.801515,
       "lon": 9.217323,
       "lines": 23,
-      "kinds": ["rail", "urban_rail", "bus"]
+      "kinds": ["rail", "urban_rail", "bus"],
+      "modes": ["rail", "sbahn", "ubahn", "bus"]
     }
   ],
   "total": 427,
@@ -177,7 +180,8 @@ Example: `/api/v1/stops?bbox=9.10,48.74,9.26,48.83&limit=3` (central Stuttgart)
 | `stops[].name` | Name from the timetable file. Shorter than in the search: often without the town (`"Pragfriedhof"`). |
 | `stops[].lat`, `lon` | Position: the middle of the station's platforms (the busiest platform, if they are more than 300 m apart). |
 | `stops[].lines` | How many different lines call at the station. |
-| `stops[].kinds` | Coarse kinds of transport, from: `rail`, `urban_rail` (S-Bahn, U-Bahn, tram), `bus`, `other`. For map symbols; the departures endpoint has the exact types. |
+| `stops[].kinds` | Coarse kinds of transport, from: `rail`, `urban_rail` (S-Bahn, U-Bahn, tram), `bus`, `other`. |
+| `stops[].modes` | The same with urban rail split up: `rail`, `sbahn`, `ubahn` (Stuttgart's Stadtbahn), `tram`, `bus`, `other`. Told apart by line name ("S4", "U6", anything else is a tram), which matched the live service for 40 of 41 lines checked. For map symbols; the departures endpoint has the exact types. |
 | `total` | How many stations the rectangle contains in all. |
 | `limit` | The limit that was applied. |
 
@@ -296,7 +300,7 @@ Tab ids: `trains`, `sbahn`, `tram`, `bus`, `ferry`, `cablecar`, `other`.
 | `destination` | Where the vehicle is signed to. The town is left out if it is the station's own. |
 | `via` | Up to two major stops on the way, in travel order. Can be empty. |
 | `dticket` | `true` if the Deutschlandticket is valid. `false` means not valid or not known. |
-| `time` | Expected departure: the live time if there is one, else the planned time. Can be days ahead when `next_service` is set; show the date then. |
+| `time` | Expected departure: the live time if there is one, else the planned time. Can be days ahead when `next_service` is set; show the date then. A client shows `planned` and `time` for late departures; `delay` is there for convenience. |
 | `planned` | Planned departure. |
 | `minutes` | Minutes from now until `time`, never negative. |
 | `delay` | Minutes late (negative = early), or `null` without live data. |
@@ -341,7 +345,7 @@ Errors use the matching HTTP status and always have this shape:
 | 404 | `not_found` | No such API address. |
 | 405 | `method_not_allowed` | Anything other than `GET`. |
 | 502 | `timetable_unavailable` | The timetable service behind this API didn't answer. Try again later. |
-| 503 | `stops_not_imported` | The stop database hasn't been built on this server yet (`python import_stops.py`). |
+| 503 | `stops_not_imported` | The stop database hasn't been built on this server, or was built by an older version (`python import_stops.py`). |
 
 `code` is for programs, `message` for people.
 

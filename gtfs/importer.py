@@ -43,6 +43,14 @@ PLATFORM_SUFFIX = re.compile(r"\s+(Gleis|Bstg\.?|Pos\.?|Steig|Bussteig|Bahnsteig
 KIND_OF_ROUTE_TYPE = {"2": "rail", "0": "urban_rail", "1": "urban_rail", "3": "bus"}
 KINDS = ("rail", "urban_rail", "bus", "other")
 
+# Urban rail is one route_type in the file; the line names tell the kinds
+# apart: "S4" is S-Bahn, "U6" U-Bahn (Stuttgart's Stadtbahn), anything else a
+# tram. Checked against the live service's classification: 40 of 41 lines
+# agreed, the exception being FEX, the S-Bahn-like airport express.
+SBAHN_NAME = re.compile(r"^(SN?\s?\d|FEX$)", re.IGNORECASE)
+UBAHN_NAME = re.compile(r"^U\s?\d", re.IGNORECASE)
+URBAN_MODES = ("sbahn", "ubahn", "tram")
+
 # Rail replacement buses are coded as rail (route_type 2) in the file. They
 # are named "SEV ...", or have no line name and run between bus stations.
 REPLACEMENT_NAME = re.compile(r"^\s*SEV\b", re.IGNORECASE)
@@ -61,7 +69,10 @@ TWIN_METRES = 30
 COLUMNS = ("id", "name", "lat", "lon",
            "rail_lines", "urban_lines", "bus_lines", "other_lines", "lines",
            "rail_calls", "urban_calls", "bus_calls", "other_calls", "calls",
-           "importance")
+           "importance",
+           "sbahn_lines", "ubahn_lines", "tram_lines")
+# the layout of the database; the app refuses an older one (see gtfs/store.py)
+SCHEMA_VERSION = "2"
 CREATE_TABLES = (
     """CREATE TABLE stations (
         id          TEXT PRIMARY KEY,   -- global stop id, e.g. de:08111:115 (same as EFA)
@@ -79,7 +90,10 @@ CREATE_TABLES = (
         bus_calls   INTEGER NOT NULL,
         other_calls INTEGER NOT NULL,
         calls       INTEGER NOT NULL,   -- all of the above together
-        importance  REAL NOT NULL       -- one number to rank stations by, see importance()
+        importance  REAL NOT NULL,      -- one number to rank stations by, see importance()
+        sbahn_lines INTEGER NOT NULL,   -- the urban lines split up (see urban_mode)
+        ubahn_lines INTEGER NOT NULL,
+        tram_lines  INTEGER NOT NULL
     )""",
     "CREATE INDEX stations_lat ON stations (lat)",
     "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
@@ -124,6 +138,16 @@ def route_kind(route_type: str, short_name: str, long_name: str) -> str:
         if REPLACEMENT_NAME.search(short_name) or (not short_name.strip() and BUS_PLACE.search(long_name)):
             return "bus"  # a rail replacement bus
     return kind
+
+
+def urban_mode(short_name: str) -> str:
+    """sbahn / ubahn / tram for a line of the urban_rail kind."""
+    name = short_name.strip()
+    if SBAHN_NAME.match(name):
+        return "sbahn"
+    if UBAHN_NAME.match(name):
+        return "ubahn"
+    return "tram"
 
 
 def in_bounds(lat: float, lon: float) -> bool:
@@ -224,9 +248,10 @@ def read_feed(zip_path: Path) -> tuple:
         routes = {}
         for r in read_table(archive, "routes.txt"):
             kind = route_kind(r["route_type"], r["route_short_name"], r["route_long_name"])
-            routes[r["route_id"]] = (r["route_short_name"].strip() or r["route_long_name"].strip(), kind)
+            mode = urban_mode(r["route_short_name"]) if kind == "urban_rail" else kind
+            routes[r["route_id"]] = (r["route_short_name"].strip() or r["route_long_name"].strip(), kind, mode)
         trip_route = {r["trip_id"]: r["route_id"] for r in read_table(archive, "trips.txt")}
-        lines = defaultdict(set)             # station -> {(line name, kind)}
+        lines = defaultdict(set)             # station -> {(line name, kind, mode)}
         calls = defaultdict(Counter)         # station -> kind -> scheduled trips calling there
         platform_calls = Counter()           # platform -> scheduled trips calling there
         with archive.open("stop_times.txt") as raw:
@@ -261,8 +286,9 @@ def read_feed(zip_path: Path) -> tuple:
         name = station_name(names[sid], parent_names.get(sid))
         if not is_real_name(name):
             continue
-        per_kind_lines = Counter(kind for _, kind in lines[sid])
+        per_kind_lines = Counter(kind for _, kind, _ in lines[sid])
         line_counts = {kind: per_kind_lines[kind] for kind in KINDS}
+        per_mode_lines = Counter(mode for _, _, mode in lines[sid])
         call_counts = {kind: calls[sid][kind] for kind in KINDS}
         lat, lon = station_position(station_platforms)
         stations.append((
@@ -270,6 +296,7 @@ def read_feed(zip_path: Path) -> tuple:
             *line_counts.values(), sum(line_counts.values()),
             *call_counts.values(), sum(call_counts.values()),
             importance(line_counts, call_counts),
+            *(per_mode_lines[mode] for mode in URBAN_MODES),
         ))
     return stations, feed
 
@@ -368,6 +395,7 @@ def build(zip_path: Path, db_path: Path, source: str = SOURCE_URL, min_stations:
         "imported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "stations": str(len(stations)),
         "duplicates": duplicates,
+        "schema": SCHEMA_VERSION,
     }
 
     db_path.parent.mkdir(parents=True, exist_ok=True)

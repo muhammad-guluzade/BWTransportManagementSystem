@@ -41,7 +41,8 @@ def invalid_area(exc):
 
 @bp.errorhandler(StopsNotImported)
 def stops_not_imported(exc):
-    return error(503, "stops_not_imported", "The stop database has not been built yet. Run: python import_stops.py")
+    return error(503, "stops_not_imported",
+                 "The stop database is missing or was built by an older version. Run: python import_stops.py")
 
 
 @bp.route("/")

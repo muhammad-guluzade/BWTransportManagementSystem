@@ -12,7 +12,8 @@ let refreshTimer;
 
 // How often the departures board gets updated
 const REFRESH_MS = 30000;
-// How many departures a platform shows before "Show more"
+// How many departures a platform shows at first, and how many more each
+// click on "Show more" adds
 const PER_PLATFORM = 10;
 
 // what is currently on screen
@@ -24,7 +25,7 @@ let showRaw = false;           // "Show API response" is switched on
 let requestCounter = 0;        // to ignore answers that arrive out of order
 let selectedFrom = null;       // where the current stop was picked: 'search', 'link' or 'map'
 let announced = true;          // the map has been told about the current stop
-const expanded = new Set();    // platforms the user clicked "Show more" on
+const shownCount = new Map();  // platform -> how many departures it shows (after "Show more" clicks)
 
 // departure times arrive in UTC; show them in local German time
 const timeFormat = new Intl.DateTimeFormat('de-DE', {
@@ -95,7 +96,7 @@ function selectStop(id, name, source = 'search') {
   selectedFrom = source;
   announced = false;
   currentTab = '';
-  expanded.clear();
+  shownCount.clear();
   stationBox.innerHTML = '';
   board.innerHTML = '';
   rawBox.innerHTML = '';
@@ -108,7 +109,7 @@ function selectStop(id, name, source = 'search') {
 
 function selectTab(tabId) {
   currentTab = tabId;
-  expanded.clear();
+  shownCount.clear();
   board.innerHTML = '';
   status.textContent = 'Loading...';
   loadDepartures();
@@ -237,10 +238,10 @@ function renderDeparture(dep) {
     timeCell.appendChild(el('s', '', formatTime(dep.planned || dep.time)));
     timeCell.appendChild(el('span', 'late', ' Cancelled'));
   } else if (dep.delay >= 1) {
-    // late: planned time crossed out, then the new time and the delay
+    // late: planned time crossed out, then the new time
     timeCell.appendChild(el('s', '', formatTime(dep.planned)));
-    timeCell.appendChild(document.createTextNode(' ' + formatTime(dep.time) + ' '));
-    timeCell.appendChild(el('span', 'late', `+${dep.delay} min`));
+    timeCell.appendChild(document.createTextNode(' '));
+    timeCell.appendChild(el('span', 'late', formatTime(dep.time)));
   } else {
     timeCell.appendChild(document.createTextNode(formatTime(dep.time)));
   }
@@ -265,16 +266,17 @@ function renderPlatform(mode, platform) {
   }
 
   const key = `${mode.id}|${platform.name}`;
-  const hidden = expanded.has(key) ? 0 : Math.max(0, platform.departures.length - PER_PLATFORM);
-  const shown = platform.departures.slice(0, platform.departures.length - hidden);
+  const count = Math.min(shownCount.get(key) || PER_PLATFORM, platform.departures.length);
+  const hidden = platform.departures.length - count;
 
   const table = el('table');
-  shown.forEach(dep => table.appendChild(renderDeparture(dep)));
+  platform.departures.slice(0, count).forEach(dep => table.appendChild(renderDeparture(dep)));
   block.appendChild(table);
 
   if (hidden > 0) {
-    const more = el('button', 'show-more', `Show ${hidden} more`);
-    more.onclick = () => { expanded.add(key); render(); };
+    // ten more per click, so the list grows step by step
+    const more = el('button', 'show-more', `Show ${Math.min(PER_PLATFORM, hidden)} more`);
+    more.onclick = () => { shownCount.set(key, count + PER_PLATFORM); render(); };
     block.appendChild(more);
   }
   return block;

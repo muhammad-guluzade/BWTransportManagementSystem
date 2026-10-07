@@ -61,6 +61,7 @@ ROUTES = [  # id, short name, long name, route_type
     ("r-ice", "ICE", "", "2"), ("r-re5", "RE5", "", "2"),
     ("r-u6", "U6", "", "0"), ("r-u6-back", "U6", "", "0"), ("r-u7", "U7", "", "0"),
     ("r-57", "57", "", "3"), ("r-7343", "7343", "", "3"), ("r-ship", "Schiff", "", "4"),
+    ("r-s4", "S4", "", "0"), ("r-tram5", "RNV 5", "", "0"),
     # rail replacement buses, coded as rail in the file
     ("r-sev", "SEV S41", "", "2"), ("r-sev2", "", "Hauptbahnhof/Busbahnhof - Osterburken", "2"),
     # a real train that has no line name
@@ -79,6 +80,8 @@ STOP_TIMES = [  # route, stop
     ("r-57", "de:08135:133:0:1"), ("r-57", "de:08135:133:0:2"), ("r-7343", "de:08135:133:0:2"),
     ("r-7343", "de:08226:582:0:1"), ("r-7343", "de:08226:400582:0:1"),
     ("r-57", "de:08336:11126:0:1"), ("r-57", "de:08336:11226:0:1"),
+    # Löwentorbrücke also gets an S-Bahn and a tram (made up, to see the split)
+    ("r-s4", "de:08111:6114:1:1"), ("r-tram5", "de:08111:6114:1:1"),
 ]
 SERVED = {"de:08111:6115", "de:08111:6113", "de:08111:6114", "de:08315:6232", "de:08125:700", "de:08135:133",
           "de:08226:582", "de:08336:11126", "de:08336:11226"}
@@ -213,6 +216,39 @@ class ImportTest(StopsDbTestCase):
         self.assertEqual(kinds["de:08315:6232"], ["bus", "other"])
         self.assertEqual(kinds["de:08125:700"], ["bus"])
 
+    def test_modes_split_urban_rail(self):
+        stops, _ = store.in_area(-180, -90, 180, 90, 100)
+        modes = {s["id"]: s["modes"] for s in stops}
+        self.assertEqual(modes["de:08111:6113"], ["ubahn", "bus"])                     # U6, U7, bus 57
+        self.assertEqual(modes["de:08111:6114"], ["sbahn", "ubahn", "tram", "bus"])    # U6, S4, RNV 5, bus 57
+        self.assertEqual(modes["de:08111:6115"], ["rail"])
+        self.assertEqual(modes["de:08315:6232"], ["bus", "other"])
+        row = self.stations()["de:08111:6114"]
+        # the split adds up to the urban lines, and the ranking is unchanged by it
+        self.assertEqual(row["sbahn_lines"] + row["ubahn_lines"] + row["tram_lines"], row["urban_lines"])
+
+    def test_old_database_is_refused_with_a_hint(self):
+        # a database from before the split has no tram_lines column
+        db = sqlite3.connect(store.DB_PATH)
+        db.execute("CREATE TABLE old AS SELECT id, name, lat, lon, rail_lines, urban_lines, bus_lines, other_lines, lines, "
+                   "rail_calls, urban_calls, bus_calls, other_calls, calls, importance FROM stations")
+        db.execute("DROP TABLE stations")
+        db.execute("ALTER TABLE old RENAME TO stations")
+        db.commit()
+        db.close()
+        with self.assertRaises(store.StopsNotImported):
+            store.in_area(-180, -90, 180, 90, 100)
+        res = app.test_client().get("/api/v1/stops?bbox=7.5,47.5,10.5,49.8")
+        self.assertEqual(res.status_code, 503)
+        self.assertEqual(res.get_json()["error"]["code"], "stops_not_imported")
+        self.assertIn("older version", res.get_json()["error"]["message"])
+        # rebuilding fixes it
+        build(self.zip)
+        self.assertTrue(store.in_area(-180, -90, 180, 90, 100)[0])
+
+    def test_meta_records_the_schema(self):
+        self.assertEqual(store.meta()["schema"], importer.SCHEMA_VERSION)
+
     def test_meta(self):
         meta = store.meta()
         self.assertEqual(meta["feed_version"], "20260929")
@@ -313,6 +349,15 @@ class RulesTest(unittest.TestCase):
         self.assertTrue(importer.is_real_name("Öhringen"))
         for junk in (".", "", "  ", "12", "-"):
             self.assertFalse(importer.is_real_name(junk), junk)
+
+    def test_urban_mode(self):
+        mode = importer.urban_mode
+        for name in ("S1", "S 62", "S60", "SN14", "FEX", "s4"):
+            self.assertEqual(mode(name), "sbahn", name)
+        for name in ("U6", "U 13", "U15"):
+            self.assertEqual(mode(name), "ubahn", name)
+        for name in ("1", "6A", "RNV 5", "E", "D", "SC", "NL1", ""):
+            self.assertEqual(mode(name), "tram", name)
 
     def test_route_kind(self):
         kind = importer.route_kind
@@ -665,7 +710,8 @@ class AreaTest(StopsDbTestCase):
     def test_most_important_first(self):
         stops, total = store.in_area(9.0, 48.7, 9.3, 48.9, 10)
         self.assertEqual(total, 3)
-        self.assertEqual([s["id"] for s in stops], ["de:08111:6115", "de:08111:6113", "de:08111:6114"])
+        # in this test file Löwentorbrücke has more lines (U6, S4, a tram, a bus) than Pragsattel
+        self.assertEqual([s["id"] for s in stops], ["de:08111:6115", "de:08111:6114", "de:08111:6113"])
 
     def test_limit_keeps_the_most_important(self):
         stops, total = store.in_area(9.0, 48.7, 9.3, 48.9, 1)
@@ -749,7 +795,7 @@ class SpreadTest(StopsDbTestCase):
         stations = [(f"de:08111:{i}", f"Stop {i}", 47.6 + (i % 40) * 0.05, 7.6 + (i // 40) * 0.07) for i in range(1600)]
         db = sqlite3.connect(store.DB_PATH)
         db.execute("DELETE FROM stations")
-        db.executemany("INSERT INTO stations VALUES (?, ?, ?, ?, 0, 0, 1, 0, 1, 0, 0, ?, 0, ?, ?)",
+        db.executemany("INSERT INTO stations VALUES (?, ?, ?, ?, 0, 0, 1, 0, 1, 0, 0, ?, 0, ?, ?, 0, 0, 0)",
                        [(sid, name, lat, lon, i % 97, i % 97, (i % 97) / 10) for i, (sid, name, lat, lon) in enumerate(stations)])
         db.commit()
         db.close()
@@ -772,9 +818,9 @@ class AreaApiTest(StopsDbTestCase):
         self.assertEqual(list(body), ["stops", "total", "limit"])
         self.assertEqual((body["total"], body["limit"], len(body["stops"])), (3, 2, 2))
         stop = body["stops"][0]
-        self.assertEqual(list(stop), ["id", "name", "lat", "lon", "lines", "kinds"])
-        self.assertEqual((stop["id"], stop["name"], stop["lines"], stop["kinds"]),
-                         ("de:08111:6115", "Stuttgart Hauptbahnhof (oben)", 3, ["rail"]))
+        self.assertEqual(list(stop), ["id", "name", "lat", "lon", "lines", "kinds", "modes"])
+        self.assertEqual((stop["id"], stop["name"], stop["lines"], stop["kinds"], stop["modes"]),
+                         ("de:08111:6115", "Stuttgart Hauptbahnhof (oben)", 3, ["rail"], ["rail"]))
 
     def test_limit_defaults_and_is_capped(self):
         self.assertEqual(self.http.get("/api/v1/stops?bbox=9.0,48.7,9.3,48.9").get_json()["limit"], 100)

@@ -24,8 +24,9 @@
   const MAX_STOPS = 150;
   // how far to zoom in when a stop is picked from the search
   const STOP_ZOOM = 15;
-  // marker colours per kind of transport, most important kind first
-  const KIND_COLOURS = [['rail', '#c1121c'], ['urban_rail', '#005aa9'], ['bus', '#a1338f']];
+  // marker colours per kind of transport, most important first; a stop gets the
+  // colour of the first one that serves it (the legend in index.html matches)
+  const MODE_COLOURS = [['rail', '#c1121c'], ['sbahn', '#2e8b47'], ['ubahn', '#005aa9'], ['tram', '#e07b00'], ['bus', '#a1338f']];
   const OTHER_COLOUR = '#666';
   // the stop data gives a few different stops the very same position; their
   // markers are drawn this many pixels apart so that each can be clicked
@@ -63,7 +64,7 @@
   }
 
   function colourOf(stop) {
-    const match = KIND_COLOURS.find(([kind]) => stop.kinds.includes(kind));
+    const match = MODE_COLOURS.find(([mode]) => stop.modes.includes(mode));
     return match ? match[1] : OTHER_COLOUR;
   }
 

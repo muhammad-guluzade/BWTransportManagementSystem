@@ -7,6 +7,9 @@ from pathlib import Path
 DB_PATH = Path(__file__).parent.parent / "data" / "stops.sqlite"
 
 KIND_COLUMNS = (("rail", "rail_lines"), ("urban_rail", "urban_lines"), ("bus", "bus_lines"), ("other", "other_lines"))
+# the same, with urban rail split up: for map colours
+MODE_COLUMNS = (("rail", "rail_lines"), ("sbahn", "sbahn_lines"), ("ubahn", "ubahn_lines"), ("tram", "tram_lines"),
+                ("bus", "bus_lines"), ("other", "other_lines"))
 
 SOURCE_PAGE = "https://www.nvbw.de/open-data"
 
@@ -16,7 +19,8 @@ LAT_PER_LON = 0.66
 
 
 class StopsNotImported(Exception):
-    """The stop database hasn't been built yet."""
+    """The stop database hasn't been built yet, or was built by an older
+    version of the importer and lacks something the app needs now."""
 
 
 def connect() -> sqlite3.Connection:
@@ -49,7 +53,14 @@ def to_stop(row: sqlite3.Row) -> dict:
         "lon": row["lon"],
         "lines": row["lines"],
         "kinds": [kind for kind, column in KIND_COLUMNS if row[column]],
+        "modes": [mode for mode, column in MODE_COLUMNS if row[column]],
     }
+
+
+def to_stops(rows: list) -> list:
+    if rows and "tram_lines" not in rows[0].keys():
+        raise StopsNotImported(f"{DB_PATH} was built by an older version; run the import again")
+    return [to_stop(row) for row in rows]
 
 
 def cell_sizes(west: float, east: float, south: float, north: float, limit: int):
@@ -99,7 +110,7 @@ def in_area(west: float, south: float, east: float, north: float, limit: int, sp
             (width, width * LAT_PER_LON, *box, limit))
     else:
         rows = query(f"SELECT * FROM stations WHERE {where} ORDER BY importance DESC, id LIMIT ?", (*box, limit))
-    return [to_stop(row) for row in rows], total
+    return to_stops(rows), total
 
 
 def meta() -> dict:

@@ -15,9 +15,11 @@ main { flex: 1; display: flex; min-height: 0; }
 #map-note { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 1000; max-width: 80%; padding: 8px 14px; border: 1px solid #e0c36a; border-radius: 6px; background: #fff8e1; font-size: 0.9rem; }
 #legend { position: absolute; left: 10px; bottom: 24px; z-index: 1000; display: flex; flex-direction: column; gap: 3px; padding: 7px 10px; border: 1px solid #ccc; border-radius: 6px; background: rgba(255, 255, 255, 0.92); font-size: 0.8rem; }
 .dot { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 50%; border: 1px solid white; box-shadow: 0 0 0 1px #999; }
-.dot.kind-rail { background: #c1121c; }
-.dot.kind-urban_rail { background: #005aa9; }
-.dot.kind-bus { background: #a1338f; }
+.dot.mode-rail { background: #c1121c; }
+.dot.mode-sbahn { background: #2e8b47; }
+.dot.mode-ubahn { background: #005aa9; }
+.dot.mode-tram { background: #e07b00; }
+.dot.mode-bus { background: #a1338f; }
 
 #search-box { position: relative; flex: 1; max-width: 620px; }
 input[type=text] { width: 100%; padding: 10px; font-size: 1rem; box-sizing: border-box; border: 1px solid #aaa; border-radius: 4px; }
