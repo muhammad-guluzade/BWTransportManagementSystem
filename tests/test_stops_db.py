@@ -7,6 +7,7 @@ one, so the tests need neither the 55 MB download nor the network."""
 import csv
 import io
 import math
+import os
 import sqlite3
 import sys
 import tempfile
@@ -701,9 +702,41 @@ class StoreTest(StopsDbTestCase):
         store.DB_PATH = self.folder / "nowhere.sqlite"
         with self.assertRaises(store.StopsNotImported):
             store.in_area(0, 0, 1, 1, 10)
+        with self.assertRaises(store.StopsNotImported):
+            store.importance()
         sqlite3.connect(store.DB_PATH).close()  # a file without tables
         with self.assertRaises(store.StopsNotImported):
             store.in_area(0, 0, 1, 1, 10)
+        with self.assertRaises(store.StopsNotImported):
+            store.importance()
+
+    def test_importance_of_every_station(self):
+        stations = self.stations()
+        self.assertEqual(store.importance(), {stop_id: row["importance"] for stop_id, row in stations.items()})
+        self.assertEqual(len(store.importance()), len(SERVED))
+        self.assertIs(store.importance(), store.importance())  # kept in memory, not read every time
+
+    def test_importance_is_read_again_after_an_import(self):
+        before = dict(store.importance())
+        db = sqlite3.connect(store.DB_PATH)
+        db.execute("UPDATE stations SET importance = importance + 100")
+        db.commit()
+        db.close()
+        # some file systems keep times only to the second
+        stat = store.DB_PATH.stat()
+        os.utime(store.DB_PATH, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+        after = store.importance()
+        self.assertEqual({stop_id: round(value - 100, 6) for stop_id, value in after.items()},
+                         {stop_id: round(value, 6) for stop_id, value in before.items()})
+
+    def test_boards_get_the_importance_or_nothing(self):
+        from services.departures import stop_importance
+        self.assertEqual(stop_importance(), store.importance())
+        store.DB_PATH = self.folder / "nowhere.sqlite"
+        self.assertEqual(stop_importance(), {})
+        store.DB_PATH.write_text("this is not a database")
+        with self.assertLogs("services.departures", level="WARNING"):
+            self.assertEqual(stop_importance(), {})
 
 
 class AreaTest(StopsDbTestCase):

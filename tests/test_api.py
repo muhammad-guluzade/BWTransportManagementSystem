@@ -58,6 +58,18 @@ EVENT = {
     ],
 }
 
+def setUpModule():
+    # these tests must give the same result with or without a stop database on
+    # the machine; the via stops' use of it is tested with made-up numbers
+    global _real_importance
+    _real_importance = departures.stop_importance
+    departures.stop_importance = lambda: {}
+
+
+def tearDownModule():
+    departures.stop_importance = _real_importance
+
+
 SEARCH = {"stopFinder": {"points": [
     {"anyType": "stop", "name": "Stuttgart, Hauptbahnhof", "quality": "1000", "modes": "0,13,16",
      "ref": {"gid": STOP, "coords": "9.183172,48.784729"}},
@@ -153,6 +165,23 @@ class DeparturesTest(ApiTestCase):
             "realtime": True,
             "cancelled": False,
         })
+
+    def test_via_stops_are_ranked_with_the_stop_database(self):
+        # a third stop on the way, so that two have to be chosen
+        geislingen = {**platform_of("de:08117:2000", "Geislingen (Steige)", "2"), "productClasses": [0, 5]}
+        self.events = [{**EVENT, "onwardLocations": EVENT["onwardLocations"][:2] + [geislingen] + EVENT["onwardLocations"][2:]}]
+        original = departures.stop_importance
+        try:
+            departures.stop_importance = lambda: {"de:08116:7800": 32.7, "de:08117:5000": 28.0, "de:08117:2000": 12.0}
+            via = self.get().get_json()["modes"][0]["platforms"][0]["departures"][0]["via"]
+            self.assertEqual(via, ["Plochingen", "Göppingen"])
+            # no stop database on the server: the board still works, going by
+            # what the timetable service says (Geislingen has trains, Göppingen only "buses")
+            departures.stop_importance = lambda: {}
+            via = self.get().get_json()["modes"][0]["platforms"][0]["departures"][0]["via"]
+            self.assertEqual(via, ["Plochingen", "Geislingen (Steige)"])
+        finally:
+            departures.stop_importance = original
 
     def test_unknown_tab_falls_back_to_the_first(self):
         self.assertEqual(self.get("?tab=nonsense").get_json()["tab"], "trains")

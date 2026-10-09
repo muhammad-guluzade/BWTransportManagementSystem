@@ -2,6 +2,7 @@
 (tab), grouped by mode, then by platform within each mode."""
 import logging
 import re
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -9,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from efa import client, parse
 from efa.localtime import to_local
+from gtfs import store
 
 log = logging.getLogger(__name__)
 
@@ -65,16 +67,30 @@ def platform_sort_key(name: str):
     return (0, int(number.group()), name) if number else (1, 0, name)
 
 
+def stop_importance() -> dict:
+    """{station id: importance} from the stop database, for picking the via
+    stops. {} if the database isn't there: a board must work without it, the
+    via stops then go by what the timetable service says about each stop."""
+    try:
+        return store.importance()
+    except store.StopsNotImported:
+        return {}
+    except sqlite3.Error:
+        log.warning("Could not read the stop database for the via stops", exc_info=True)
+        return {}
+
+
 def parse_events(events) -> list:
     """Stop events as departure dicts. Flights and on-demand services are
     left out, and so is any event that can't be read: one malformed
     departure from EFA must not take the whole board down."""
     departures = []
+    importance = stop_importance()
     for event in events if isinstance(events, list) else []:
         try:
             if parse.is_excluded(event):
                 continue
-            departure = parse.parse_departure(event)
+            departure = parse.parse_departure(event, importance=importance)
             # without a departure time there is nothing to show
             if departure["time"]:
                 departures.append(departure)

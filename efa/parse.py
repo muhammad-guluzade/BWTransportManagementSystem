@@ -279,8 +279,9 @@ def onward_name(onward_location: dict) -> str:
 def stop_score(onward_location: dict) -> int:
     """How 'major' an onward stop looks, from data EFA already gives us.
 
-    Weak for ordinary tram/bus stops (they all score about the same); to be
-    improved with lines-per-stop once the full stop list is imported."""
+    Weak for ordinary tram/bus stops (they all score about the same), so it
+    is only used for stops the stop database doesn't have: see
+    `estimated_importance`."""
     classes = set(onward_location.get("productClasses") or [])
     name = onward_name(onward_location).lower()
     score = len(classes)
@@ -293,34 +294,97 @@ def stop_score(onward_location: dict) -> int:
     return score
 
 
-def via_stops(event: dict, horizon: int = 8, count: int = 2) -> list:
+def estimated_importance(onward_location: dict) -> float:
+    """The stop database's importance, estimated for a stop it doesn't have
+    (anything outside Baden-Württemberg), so that Frankfurt or Augsburg can
+    be compared with the stations it does have.
+
+    The curve is the typical database importance of stops with the same
+    `stop_score`, fitted on 2,697 stops known to both (October 2026):
+    score 5 -> 6, 10 -> 20, 13 (Frankfurt Hbf) -> 32."""
+    return 1.2 + 0.185 * stop_score(onward_location) ** 2
+
+
+# Trains and long-distance buses stop every few kilometres, so their two most
+# important stops are named as they are. City lines stop every few hundred
+# metres: there the second stop named must not be the first one's neighbour.
+FAR_APART_MODES = {"Regional train", "Long-distance train", "Long-distance bus"}
+# The railway's timetable lists border crossings ("Kehl Grenze") like stops.
+# Buses really do stop at places called that, trains don't.
+RAIL_MODES = {"Regional train", "Long-distance train", "S-Bahn"}
+BORDER_POINT = re.compile(r"\bGrenze$")
+LONG_DISTANCE_MODES = {"Long-distance train", "Long-distance bus"}
+
+
+def passed_not_served(location: dict, mode: str) -> bool:
+    """Long-distance timetables also list points the vehicle only passes: a
+    border crossing, a tram stop on a coach's way through town. Those come
+    without a platform and with no time between arriving and leaving; real
+    stops have one or the other. (Local lines are different: their stops
+    often have neither, so the rule is not for them.)"""
+    if mode not in LONG_DISTANCE_MODES or location.get("type") == "platform":
+        return False
+    arrival = location.get("arrivalTimePlanned")
+    return bool(arrival) and arrival == location.get("departureTimePlanned")
+
+
+def via_stops(event: dict, importance: dict | None = None, horizon: int = 8, count: int = 2) -> list:
     """Major stops one departure calls at next, e.g. U6 to Gerlingen from
     Pragfriedhof -> ['Pragsattel', 'Feuerbach Bf'].
 
-    Looks at the next `horizon` stops before the destination and returns the
-    `count` most important ones in travel order. If they all look equally
-    important, takes every second stop instead. Empty list = the destination
-    is (almost) the next stop, so there is nothing worth adding."""
-    here = event.get("location") or {}
-    here_name = (here.get("parent") or {}).get("name")
-    city = locality(here)
+    `importance` is the stop database's {station id: importance}; a stop it
+    doesn't have gets an estimate. Without it every stop gets the estimate.
 
-    stops = []  # (name, score), de-duplicated, in travel order
+    Looks at the next `horizon` stops before the signed destination and
+    returns the most important ones in travel order: on city lines the most
+    important stop and the most important one that isn't right next to it,
+    on trains simply the `count` most important. If they all look equally
+    important, takes every second stop instead. Empty list = the destination
+    is the next stop, so there is nothing to add."""
+    importance = importance or {}
+    here = event.get("location") or {}
+    here_name = station_of(here).get("name")
+    city = locality(here)
+    transportation = event.get("transportation") or {}
+    mode = mode_group(transportation)
+    signed = (transportation.get("destination") or {}).get("name") or ""
+    destination = short_name(signed, city)
+
+    stops = []  # (name, importance), de-duplicated, in travel order
+    reached = False
     for o in event.get("onwardLocations") or []:
         name = onward_name(o)
         if not name or name == here_name or NOT_A_STOP.search(name) or any(name == n for n, _ in stops):
             continue
-        stops.append((name, stop_score(o)))
-    stops = stops[:-1]  # the last stop is the destination, already shown on the row
+        if passed_not_served(o, mode) or (mode in RAIL_MODES and BORDER_POINT.search(name)):
+            continue
+        if signed and (name == signed or short_name(name, city) == destination):
+            # vehicles often carry on past what their sign says (to the depot,
+            # round a ring): nothing after it is on the way there
+            reached = True
+            break
+        known = importance.get(station_of(o).get("id"))
+        stops.append((name, estimated_importance(o) if known is None else known))
+    if not reached:
+        # the sign names the last stop in other words ("Böfingen" for
+        # "Ostpreußenweg"): the last stop is the destination
+        stops = stops[:-1]
     stops = stops[:horizon]
     if not stops:
         return []
 
-    if len({score for _, score in stops}) == 1:
+    def best(candidates):
+        return max(candidates, key=lambda i: (stops[i][1], -i))  # the earlier one of equals
+
+    if len(stops) > 1 and len({score for _, score in stops}) == 1:
         picked = stops[1::2][:count]
+    elif count == 2 and len(stops) > 2 and mode not in FAR_APART_MODES:
+        first = best(range(len(stops)))
+        apart = [i for i in range(len(stops)) if abs(i - first) > 1] or [i for i in range(len(stops)) if i != first]
+        picked = [stops[i] for i in sorted((first, best(apart)))]
     else:
-        best = sorted(range(len(stops)), key=lambda i: (-stops[i][1], i))[:count]
-        picked = [stops[i] for i in sorted(best)]
+        top = sorted(range(len(stops)), key=lambda i: (-stops[i][1], i))[:count]
+        picked = [stops[i] for i in sorted(top)]
     return [short_name(name, city) for name, _ in picked]
 
 
@@ -401,13 +465,14 @@ def trip_stop(location: dict, city: str, arriving: bool) -> dict:
     }
 
 
-def trip_stops(locations, city: str, arriving: bool, skip: str = "") -> list:
+def trip_stops(locations, city: str, arriving: bool, skip: str = "", mode: str = "") -> list:
     """The stops of a trip before or after this station, in travel order,
-    without repeats and without this station itself."""
+    without repeats, without this station itself and without points the
+    vehicle only passes."""
     stops = []
     for location in locations if isinstance(locations, list) else []:
         stop = trip_stop(location, city, arriving)
-        if not stop["name"] or NOT_A_STOP.search(stop["name"]) or stop["id"] == skip:
+        if not stop["name"] or NOT_A_STOP.search(stop["name"]) or stop["id"] == skip or passed_not_served(location, mode):
             continue
         if stops and stops[-1]["id"] == stop["id"]:
             continue
@@ -423,6 +488,7 @@ def parse_trip(event: dict) -> dict:
     location = event.get("location") or {}
     transportation = event.get("transportation") or {}
     city = locality(location)
+    mode = mode_group(transportation)
     here = trip_stop({**location,
                       "departureTimePlanned": event.get("departureTimePlanned"),
                       "departureTimeEstimated": event.get("departureTimeEstimated"),
@@ -432,13 +498,14 @@ def parse_trip(event: dict) -> dict:
         "line": line_name(transportation),
         "destination": short_name((transportation.get("destination") or {}).get("name") or "?", city),
         "here": here,
-        "previous": trip_stops(event.get("previousLocations"), city, arriving=False, skip=here["id"]),
-        "onward": trip_stops(event.get("onwardLocations"), city, arriving=True, skip=here["id"]),
+        "previous": trip_stops(event.get("previousLocations"), city, arriving=False, skip=here["id"], mode=mode),
+        "onward": trip_stops(event.get("onwardLocations"), city, arriving=True, skip=here["id"], mode=mode),
     }
 
 
-def parse_departure(event: dict, now: datetime | None = None) -> dict:
-    """One stop event as a flat dict the rest of the app works with."""
+def parse_departure(event: dict, now: datetime | None = None, importance: dict | None = None) -> dict:
+    """One stop event as a flat dict the rest of the app works with.
+    `importance` ranks the via stops, see `via_stops`."""
     now = now or datetime.now(timezone.utc)
     transportation = event.get("transportation") or {}
     location = event.get("location") or {}
@@ -461,7 +528,7 @@ def parse_departure(event: dict, now: datetime | None = None) -> dict:
         "destination": destination,
         # on ring lines the sign on the vehicle names a stop on the way, not
         # the last stop; don't list it a second time as a via stop
-        "via": [stop for stop in via_stops(event) if stop != destination],
+        "via": [stop for stop in via_stops(event, importance) if stop != destination],
         "dticket": dticket_valid(transportation) is True,
         "time": iso(actual),
         "planned": iso(planned),

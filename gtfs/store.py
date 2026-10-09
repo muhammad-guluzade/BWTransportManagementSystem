@@ -1,6 +1,7 @@
 """Read the stop database built by gtfs/importer.py (`python import_stops.py`)."""
 import math
 import sqlite3
+import threading
 from datetime import date, datetime
 from pathlib import Path
 
@@ -111,6 +112,28 @@ def in_area(west: float, south: float, east: float, north: float, limit: int, sp
     else:
         rows = query(f"SELECT * FROM stations WHERE {where} ORDER BY importance DESC, id LIMIT ?", (*box, limit))
     return to_stops(rows), total
+
+
+_importance = {"stamp": None, "values": {}}
+_importance_lock = threading.Lock()
+
+
+def importance() -> dict:
+    """{station id: importance} for every station, e.g. to tell the major
+    stops of a trip from the minor ones.
+
+    Kept in memory (a board asks for hundreds of stops at a time) and read
+    again when the database file has changed, i.e. after a new import."""
+    try:
+        stat = DB_PATH.stat()
+    except OSError:
+        raise StopsNotImported(str(DB_PATH)) from None
+    stamp = (str(DB_PATH), stat.st_mtime_ns, stat.st_size)
+    with _importance_lock:
+        if _importance["stamp"] != stamp:
+            _importance["values"] = {row["id"]: row["importance"] for row in query("SELECT id, importance FROM stations")}
+            _importance["stamp"] = stamp
+        return _importance["values"]
 
 
 def meta() -> dict:

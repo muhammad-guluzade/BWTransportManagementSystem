@@ -301,7 +301,7 @@ Tab ids: `trains`, `sbahn`, `tram`, `bus`, `ferry`, `cablecar`, `other`.
 | `id` | Identifies this departure on this station's board. Use it to ask for the departure's stops (next endpoint). It stays the same from one refresh to the next, also when the live time changes. Treat it as an opaque text. |
 | `line` | Line label: `"U7"`, `"RE5"`, `"ICE 1291"`. |
 | `destination` | Where the vehicle is signed to. The town is left out if it is the station's own. |
-| `via` | Up to two major stops on the way, in travel order. Can be empty. |
+| `via` | Up to two major stops on the way to `destination`, in travel order: names from the departure's stop list (next endpoint), never from beyond the destination. Empty if the destination is the next stop. |
 | `dticket` | `true` if the Deutschlandticket is valid. `false` means not valid or not known. |
 | `time` | Expected departure: the live time if there is one, else the planned time. Can be days ahead when `next_service` is set; show the date then. A client shows `planned` and `time` for late departures; `delay` is there for convenience. |
 | `planned` | Planned departure. |
@@ -420,8 +420,8 @@ Example: a U6 at Stuttgart, Pragfriedhof (shortened to one stop per list)
 | `cancelled` | `true` if the vehicle doesn't call at this stop. |
 
 Points of a trip where nobody can get on or off (border points of the
-railway, routing points of long-distance buses) are left out, as is this
-station itself if the vehicle comes round to it again.
+railway, places a long-distance bus or train only passes) are left out, as
+is this station itself if the vehicle comes round to it again.
 
 The board remembers its departures' stops for about ten minutes, so this
 answer normally comes at once. After that the timetable service is asked

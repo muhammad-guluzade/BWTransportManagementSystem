@@ -48,6 +48,7 @@ from efa.parse import (
     transport_attrs,
     via_stops,
 )
+from services.departures import stop_importance
 
 ENDPOINTS = {
     "bw": "https://www.efa-bw.de/nvbw/",
@@ -296,6 +297,7 @@ def survey(stations: list) -> None:
     platforms = defaultdict(lambda: {"n": 0, "examples": []})   # raw pattern -> ...
     labels = []                                                 # (station, group, platform, rows)
     total = 0
+    importance = stop_importance()                              # the app ranks via stops with the stop database
 
     for query in stations:
         try:
@@ -353,7 +355,7 @@ def survey(stations: list) -> None:
                 t = x.get("transportation") or {}
                 line = line_name(t)
                 dest = short_name((t.get("destination") or {}).get("name") or "?", locality(x.get("location") or {}))
-                rows[(line, dest, " · ".join(via_stops(x)))] += 1
+                rows[(line, dest, " · ".join(via_stops(x, importance)))] += 1
             labels.append((stops[0].get("name"), group, label, rows))
 
     print(f"\n{total} departures in total")
