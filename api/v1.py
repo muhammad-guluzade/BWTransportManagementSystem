@@ -57,7 +57,7 @@ def index():
         "version": 1,
         "endpoints": {
             "search_stops": "/api/v1/stops/search?q={text}",
-            "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}",
+            "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}&platforms={0|1}",
             "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}",
             "departure_stops": "/api/v1/stops/{stop_id}/departures/{departure_id}/stops",
         },
@@ -69,7 +69,7 @@ def index():
 @bp.route("/stops")
 def stops_in_area():
     return jsonify(stops.in_area(request.args.get("bbox", ""), request.args.get("limit", ""),
-                                 request.args.get("spread", "")))
+                                 request.args.get("spread", ""), request.args.get("platforms", "")))
 
 
 @bp.route("/stops/search")

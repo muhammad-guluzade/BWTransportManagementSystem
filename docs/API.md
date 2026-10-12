@@ -47,7 +47,7 @@ Lists the endpoints.
   "version": 1,
   "endpoints": {
     "search_stops": "/api/v1/stops/search?q={text}",
-    "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}",
+    "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}&platforms={0|1}",
     "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}",
     "departure_stops": "/api/v1/stops/{stop_id}/departures/{departure_id}/stops"
   },
@@ -115,7 +115,7 @@ Example: `/api/v1/stops/search?q=Stuttgart Hauptbahnhof`
 | `lat`, `lon` | Position of the stop. |
 | `types` | Transport types the timetable service lists for the stop. A hint only: it can include a type that has no departures. The departures endpoint returns the verified list as `tabs`. |
 
-### `GET /api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}`
+### `GET /api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}&platforms={0|1}`
 
 The stations inside a rectangle, most important first. Made for maps: ask
 for the stations of whatever the map currently shows, and you get the
@@ -126,6 +126,7 @@ main stations when zoomed out and every stop when zoomed in.
 | `bbox` | required | The rectangle as `west,south,east,north` in degrees (WGS84), e.g. `9.10,48.74,9.26,48.83`. |
 | `limit` | optional | How many stations to return at most. Default 100, maximum 500. |
 | `spread` | optional | `1` to pick the stations evenly across the rectangle instead of strictly by importance. Default `0`. |
+| `platforms` | optional | `1` to list each station's platforms as well (see below). Default `0`. |
 
 Without `spread`, a rectangle holding more stations than `limit` returns the
 most important ones, which on a map of the whole state all sit in the big
@@ -179,12 +180,34 @@ Example: `/api/v1/stops?bbox=9.10,48.74,9.26,48.83&limit=3` (central Stuttgart)
 |---|---|
 | `stops[].id` | Stop id; the same ids as in the search and the departures endpoint. |
 | `stops[].name` | Name from the timetable file. Shorter than in the search: often without the town (`"Pragfriedhof"`). |
-| `stops[].lat`, `lon` | Position: the middle of the station's platforms (the busiest platform, if they are more than 300 m apart). |
+| `stops[].lat`, `lon` | Position: where the station's trains stop. The middle of its tracks; without any, of its S-Bahn/U-Bahn/tram platforms; without those, of its bus platforms. (If those platforms are more than 300 m apart, the busiest of them.) A bus station next to a railway station does not pull the point away from the tracks. |
 | `stops[].lines` | How many different lines call at the station. |
 | `stops[].kinds` | Coarse kinds of transport, from: `rail`, `urban_rail` (S-Bahn, U-Bahn, tram), `bus`, `other`. |
 | `stops[].modes` | The same with urban rail split up: `rail`, `sbahn`, `ubahn` (Stuttgart's Stadtbahn), `tram`, `bus`, `other`. Told apart by line name ("S4", "U6", anything else is a tram), which matched the live service for 40 of 41 lines checked. For map symbols; the departures endpoint has the exact types. |
 | `total` | How many stations the rectangle contains in all. |
 | `limit` | The limit that was applied. |
+
+**With `platforms=1`** every stop also has `platforms`, the platforms of
+the station that have service, busiest first. A map can use them to show
+the bays of a bus station as places of their own once it is zoomed in far
+enough. A station then counts as inside the rectangle if any of its
+platforms is.
+
+```json
+"platforms": [
+  {"id": "de:08118:7402:1:2", "code": "2", "lat": 48.892236, "lon": 9.185119, "kinds": ["rail", "urban_rail"], "towards": []},
+  {"id": "de:08118:7402:5:15", "code": "15", "lat": 48.891087, "lon": 9.187212, "kinds": ["bus"],
+   "towards": ["Ludwigsburg Martin-Luther-Str.", "Ludwigsburg Uhlandstraße"]}
+]
+```
+
+| Field | |
+|---|---|
+| `platforms[].id` | The platform's id: the same as a platform's `id` on the departure board. |
+| `platforms[].code` | The number on its sign (`"15"`, `"2(U)"`), or `null`: most bus stops have none. |
+| `platforms[].lat`, `lon` | Where the platform is. |
+| `platforms[].kinds` | What stops there, from `rail`, `urban_rail`, `bus`, `other`. |
+| `platforms[].towards` | For bus platforms: the one or two stations most of its buses call at next, from the timetable (`[]` if unknown, and for tracks). Tells the two sides of a street apart. |
 
 Stations are ranked by an importance score built from how busy a station
 is (scheduled trips calling there) and how connected (lines). Rail counts

@@ -4,7 +4,9 @@ Build the stop database from NVBW's timetable file (GTFS).
 The file lists every platform in and around Baden-Württemberg plus the
 whole timetable. From it we keep one row per station in BW: name,
 position, and how much service it has (used to rank stops on the map, in
-search and as via stops).
+search and as via stops). And one row per platform: where it is, what
+stops there and which way its buses leave (to show the bays of a bus
+station as places of their own).
 
 Data: "Datensatz der NVBW GmbH", https://www.nvbw.de/open-data
 Licence: Datenlizenz Deutschland - Namensnennung - Version 2.0
@@ -37,6 +39,8 @@ MIN_STATIONS = 10000
 
 # "Stuttgart Hauptbahnhof (oben) Gleis 1" -> "Stuttgart Hauptbahnhof (oben)"
 PLATFORM_SUFFIX = re.compile(r"\s+(Gleis|Bstg\.?|Pos\.?|Steig|Bussteig|Bahnsteig|Mast)\s*\S*$")
+# the number on the sign without its word: "Bstg 15" -> "15", "Gleis 2(U)" -> "2(U)"
+PLATFORM_WORD = re.compile(r"^(Gleis|Bstg\.?|Pos\.?|Steig|Bussteig|Bahnsteig|Mast)\s*", re.IGNORECASE)
 
 # GTFS route_type -> our coarse kind. NVBW codes S-Bahn, U-Bahn and tram
 # all as 0, so the file can't tell those apart.
@@ -66,13 +70,20 @@ WIDE_STATION_METRES = 300
 # close together are checked with EFA, and ids it doesn't know are dropped.
 TWIN_METRES = 30
 
+# A station is where its trains stop. Its position comes from the platforms
+# of the first of these kinds it has, and only without any from all of them:
+# the middle between the tracks and the bus station next door is neither.
+POSITION_KINDS = ("rail", "urban_rail")
+
 COLUMNS = ("id", "name", "lat", "lon",
            "rail_lines", "urban_lines", "bus_lines", "other_lines", "lines",
            "rail_calls", "urban_calls", "bus_calls", "other_calls", "calls",
            "importance",
            "sbahn_lines", "ubahn_lines", "tram_lines")
+PLATFORM_COLUMNS = ("id", "station", "code", "lat", "lon",
+                    "rail_calls", "urban_calls", "bus_calls", "other_calls", "calls", "towards")
 # the layout of the database; the app refuses an older one (see gtfs/store.py)
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 CREATE_TABLES = (
     """CREATE TABLE stations (
         id          TEXT PRIMARY KEY,   -- global stop id, e.g. de:08111:115 (same as EFA)
@@ -96,6 +107,21 @@ CREATE_TABLES = (
         tram_lines  INTEGER NOT NULL
     )""",
     "CREATE INDEX stations_lat ON stations (lat)",
+    """CREATE TABLE platforms (
+        id          TEXT PRIMARY KEY,   -- the platform's own id, e.g. de:08118:7402:5:15 (same as EFA)
+        station     TEXT NOT NULL,      -- the station it belongs to
+        code        TEXT NOT NULL,      -- the number on its sign ("15", "2(U)"), '' if it has none
+        lat         REAL NOT NULL,
+        lon         REAL NOT NULL,
+        rail_calls  INTEGER NOT NULL,   -- scheduled trips per kind calling at this platform
+        urban_calls INTEGER NOT NULL,
+        bus_calls   INTEGER NOT NULL,
+        other_calls INTEGER NOT NULL,
+        calls       INTEGER NOT NULL,
+        towards     TEXT NOT NULL       -- where its buses go next: station names, one per line; '' if unknown
+    )""",
+    "CREATE INDEX platforms_station ON platforms (station)",
+    "CREATE INDEX platforms_lat ON platforms (lat)",
     "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
 )
 
@@ -173,6 +199,31 @@ def station_position(platforms: list) -> tuple:
     return round(lat, 6), round(lon, 6)
 
 
+def main_platforms(platforms: list) -> list:
+    """Of a station's platforms, given as [(lat, lon, calls by kind)], the
+    ones that say where the station is: its tracks, else its tram platforms,
+    else everything (see POSITION_KINDS)."""
+    for kind in POSITION_KINDS:
+        chosen = [platform for platform in platforms if platform[2].get(kind)]
+        if chosen:
+            return chosen
+    return platforms
+
+
+def platform_code(raw: str) -> str:
+    """'Bstg 15' -> '15'; '' if the platform has no sign."""
+    return PLATFORM_WORD.sub("", clean_name(raw or "")).strip()
+
+
+def most_common_next(next_calls: Counter, names: dict) -> list:
+    """Where buses from a platform go next: the names of the one or two
+    stations most of them call at next, each for at least a quarter."""
+    known = {sid: n for sid, n in next_calls.items() if sid in names}
+    total = sum(known.values())
+    ranked = sorted(known.items(), key=lambda item: (-item[1], names[item[0]]))[:2]
+    return [names[sid] for sid, n in ranked if n * 4 >= total]
+
+
 def importance(lines: dict, calls: dict) -> float:
     """How important a station is, as one number; `lines` and `calls` are
     counts per kind.
@@ -222,12 +273,14 @@ def download(dest: Path, url: str = SOURCE_URL, progress=None) -> None:
 
 
 def read_feed(zip_path: Path) -> tuple:
-    """(stations as tuples in COLUMNS order, feed info) from a GTFS file."""
+    """(stations as tuples in COLUMNS order, feed info, platforms as tuples
+    in PLATFORM_COLUMNS order) from a GTFS file."""
     with zipfile.ZipFile(zip_path) as archive:
         # 1. platforms -> stations
         names = defaultdict(list)
         parent_names = {}
         positions = {}  # platform id -> (lat, lon)
+        codes = {}      # platform id -> the number on its sign
         for row in read_table(archive, "stops.txt"):
             stop_id = row["stop_id"]
             if not stop_id.startswith(BW_PREFIX):
@@ -237,6 +290,7 @@ def read_feed(zip_path: Path) -> tuple:
                 parent_names[sid] = row["stop_name"]
                 continue
             names[sid].append(row["stop_name"])
+            codes[stop_id] = platform_code(row.get("platform_code"))
             try:
                 lat, lon = float(row["stop_lat"]), float(row["stop_lon"])
             except ValueError:
@@ -253,22 +307,36 @@ def read_feed(zip_path: Path) -> tuple:
         trip_route = {r["trip_id"]: r["route_id"] for r in read_table(archive, "trips.txt")}
         lines = defaultdict(set)             # station -> {(line name, kind, mode)}
         calls = defaultdict(Counter)         # station -> kind -> scheduled trips calling there
-        platform_calls = Counter()           # platform -> scheduled trips calling there
+        platform_calls = defaultdict(Counter)  # platform -> kind -> scheduled trips calling there
+        next_calls = defaultdict(Counter)    # bus platform -> next station -> trips going there next
+        last_call = {}                       # bus trip -> (platform, stop_sequence) of the row before
         with archive.open("stop_times.txt") as raw:
             reader = csv.reader(io.TextIOWrapper(raw, encoding="utf-8-sig"))
             header = next(reader, [])
-            trip_col, stop_col = header.index("trip_id"), header.index("stop_id")
+            trip_col, stop_col, seq_col = header.index("trip_id"), header.index("stop_id"), header.index("stop_sequence")
             for row in reader:
                 stop_id = row[stop_col]
-                if not stop_id.startswith(BW_PREFIX):
-                    continue
                 route = routes.get(trip_route.get(row[trip_col]))
                 if not route:
+                    continue
+                if route[1] == "bus":
+                    # which way a bus platform's buses leave: the station after it.
+                    # (Only the last platform of every trip is remembered, and
+                    # only platforms in BW: this file has millions of rows.)
+                    sequence = int(row[seq_col])
+                    before = last_call.get(row[trip_col])
+                    if before and sequence > before[1]:
+                        next_calls[before[0]][station_id(stop_id)] += 1
+                    if stop_id in positions:
+                        last_call[row[trip_col]] = (stop_id, sequence)
+                    elif before:
+                        del last_call[row[trip_col]]
+                if not stop_id.startswith(BW_PREFIX):
                     continue
                 sid = station_id(stop_id)
                 lines[sid].add(route)
                 calls[sid][route[1]] += 1
-                platform_calls[stop_id] += 1
+                platform_calls[stop_id][route[1]] += 1
 
         feed = {}
         if "feed_info.txt" in archive.namelist():
@@ -280,6 +348,7 @@ def read_feed(zip_path: Path) -> tuple:
         platforms[station_id(stop_id)].append((lat, lon, platform_calls[stop_id]))
 
     stations = []
+    station_names = {}
     for sid, station_platforms in platforms.items():
         if not calls[sid]:
             continue
@@ -290,7 +359,9 @@ def read_feed(zip_path: Path) -> tuple:
         line_counts = {kind: per_kind_lines[kind] for kind in KINDS}
         per_mode_lines = Counter(mode for _, _, mode in lines[sid])
         call_counts = {kind: calls[sid][kind] for kind in KINDS}
-        lat, lon = station_position(station_platforms)
+        lat, lon = station_position([(p_lat, p_lon, sum(p_calls.values()))
+                                     for p_lat, p_lon, p_calls in main_platforms(station_platforms)])
+        station_names[sid] = name
         stations.append((
             sid, name, lat, lon,
             *line_counts.values(), sum(line_counts.values()),
@@ -298,7 +369,19 @@ def read_feed(zip_path: Path) -> tuple:
             importance(line_counts, call_counts),
             *(per_mode_lines[mode] for mode in URBAN_MODES),
         ))
-    return stations, feed
+
+    # 4. one row per served platform of those stations
+    platform_rows = []
+    for stop_id, (lat, lon) in positions.items():
+        served, sid = platform_calls[stop_id], station_id(stop_id)
+        if not served or sid not in station_names:
+            continue
+        platform_rows.append((
+            stop_id, sid, codes.get(stop_id, ""), round(lat, 6), round(lon, 6),
+            *(served[kind] for kind in KINDS), sum(served.values()),
+            "\n".join(most_common_next(next_calls[stop_id], station_names)),
+        ))
+    return stations, feed, platform_rows
 
 
 def twin_candidates(stations: list) -> list:
@@ -373,7 +456,7 @@ def build(zip_path: Path, db_path: Path, source: str = SOURCE_URL, min_stations:
     can't be read or holds far fewer stations than expected. `force` skips
     that last check."""
     try:
-        stations, feed = read_feed(zip_path)
+        stations, feed, platforms = read_feed(zip_path)
     except zipfile.BadZipFile:
         raise BadFeed("the file is not a zip file. It may be damaged or an error page; download it again.") from None
     except KeyError as e:
@@ -385,6 +468,8 @@ def build(zip_path: Path, db_path: Path, source: str = SOURCE_URL, min_stations:
     duplicates = "not checked"
     if knows is not None:
         stations, duplicates = drop_ghosts(stations, knows)
+    kept = {station[0] for station in stations}
+    platforms = [platform for platform in platforms if platform[1] in kept]
 
     meta = {
         "source": source,
@@ -394,6 +479,7 @@ def build(zip_path: Path, db_path: Path, source: str = SOURCE_URL, min_stations:
         "feed_end_date": feed.get("feed_end_date", ""),
         "imported_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "stations": str(len(stations)),
+        "platforms": str(len(platforms)),
         "duplicates": duplicates,
         "schema": SCHEMA_VERSION,
     }
@@ -418,10 +504,12 @@ def build(zip_path: Path, db_path: Path, source: str = SOURCE_URL, min_stations:
         db.execute("BEGIN IMMEDIATE")
         try:
             db.execute("DROP TABLE IF EXISTS stations")
+            db.execute("DROP TABLE IF EXISTS platforms")
             db.execute("DROP TABLE IF EXISTS meta")
             for statement in CREATE_TABLES:
                 db.execute(statement)
             db.executemany(f"INSERT INTO stations VALUES ({', '.join('?' * len(COLUMNS))})", stations)
+            db.executemany(f"INSERT INTO platforms VALUES ({', '.join('?' * len(PLATFORM_COLUMNS))})", platforms)
             db.executemany("INSERT INTO meta VALUES (?, ?)", meta.items())
             db.execute("COMMIT")
         except BaseException:

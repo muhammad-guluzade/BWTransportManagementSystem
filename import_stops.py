@@ -79,6 +79,7 @@ def main() -> int:
 
     print(f"  {meta['stations']} stations in Baden-Württemberg, timetable version {meta['feed_version'] or '?'} "
           f"(valid {meta['feed_start_date']} to {meta['feed_end_date']})")
+    print(f"  {meta['platforms']} platforms of those stations")
     print(f"  duplicates: {meta['duplicates']}")
     print(f"  written to {store.DB_PATH} in {time.time() - started:.0f} s")
     if store.info()["expired"]:

@@ -8,11 +8,15 @@ from pathlib import Path
 DB_PATH = Path(__file__).parent.parent / "data" / "stops.sqlite"
 
 KIND_COLUMNS = (("rail", "rail_lines"), ("urban_rail", "urban_lines"), ("bus", "bus_lines"), ("other", "other_lines"))
+PLATFORM_KIND_COLUMNS = (("rail", "rail_calls"), ("urban_rail", "urban_calls"), ("bus", "bus_calls"), ("other", "other_calls"))
 # the same, with urban rail split up: for map colours
 MODE_COLUMNS = (("rail", "rail_lines"), ("sbahn", "sbahn_lines"), ("ubahn", "ubahn_lines"), ("tram", "tram_lines"),
                 ("bus", "bus_lines"), ("other", "other_lines"))
 
 SOURCE_PAGE = "https://www.nvbw.de/open-data"
+# The layout this code reads: the importer's SCHEMA_VERSION. A database built
+# before a change to it is refused, with a hint to run the import again.
+SCHEMA = "3"
 
 # In Baden-Württemberg one degree of longitude is about two thirds as long
 # as one degree of latitude; grid cells this much flatter come out square.
@@ -44,6 +48,51 @@ def query(sql: str, params: tuple = ()) -> list:
         raise
     finally:
         db.close()
+
+
+def file_stamp() -> tuple:
+    """Changes whenever the database file does (a new import)."""
+    try:
+        stat = DB_PATH.stat()
+    except OSError:
+        raise StopsNotImported(str(DB_PATH)) from None
+    return str(DB_PATH), stat.st_mtime_ns, stat.st_size
+
+
+_current = {"stamp": None}
+
+
+def require_current() -> None:
+    """Raise StopsNotImported unless the database has today's layout.
+    Looked up once per import, not on every request."""
+    stamp = file_stamp()
+    if _current["stamp"] != stamp:
+        if meta().get("schema") != SCHEMA:
+            raise StopsNotImported(f"{DB_PATH} was built by an older version; run the import again")
+        _current["stamp"] = stamp
+
+
+def to_platform(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "code": row["code"] or None,
+        "lat": row["lat"],
+        "lon": row["lon"],
+        "kinds": [kind for kind, column in PLATFORM_KIND_COLUMNS if row[column]],
+        "towards": row["towards"].split("\n") if row["towards"] else [],
+    }
+
+
+def platforms_of(station_ids: list) -> dict:
+    """{station id: its served platforms, the busiest first}."""
+    found = {station_id: [] for station_id in station_ids}
+    ids = list(found)
+    for start in range(0, len(ids), 500):  # SQLite takes a limited number of values per statement
+        part = ids[start:start + 500]
+        rows = query(f"SELECT * FROM platforms WHERE station IN ({', '.join('?' * len(part))}) ORDER BY calls DESC, id", tuple(part))
+        for row in rows:
+            found[row["station"]].append(to_platform(row))
+    return found
 
 
 def to_stop(row: sqlite3.Row) -> dict:
@@ -80,16 +129,25 @@ def cell_sizes(west: float, east: float, south: float, north: float, limit: int)
         rung += 1
 
 
-def in_area(west: float, south: float, east: float, north: float, limit: int, spread: bool = False) -> tuple:
+def in_area(west: float, south: float, east: float, north: float, limit: int, spread: bool = False,
+            platforms: bool = False) -> tuple:
     """(stops, total): up to `limit` stations inside the rectangle, most
     important first, and how many there are in all.
 
     Normally these are simply the most important ones. With `spread`, and
     more stations than fit, the rectangle is divided into a grid and the
     most important station of each cell is taken: on a map that covers every
-    region, where the plain top list would crowd into the big cities."""
+    region, where the plain top list would crowd into the big cities.
+
+    With `platforms` each stop also lists its platforms, and a station
+    counts as inside if any of its platforms is: a bus bay at the edge of a
+    map belongs on it even when the middle of its station does not."""
+    require_current()
     where = "lat BETWEEN ? AND ? AND lon BETWEEN ? AND ?"
     box = (south, north, west, east)
+    if platforms:
+        where = f"(({where}) OR id IN (SELECT station FROM platforms WHERE {where}))"
+        box = box * 2
     total = query(f"SELECT COUNT(*) FROM stations WHERE {where}", box)[0][0]
     if spread and total > limit:
         # the finest grid whose occupied cells all fit: as many stations as the
@@ -111,7 +169,12 @@ def in_area(west: float, south: float, east: float, north: float, limit: int, sp
             (width, width * LAT_PER_LON, *box, limit))
     else:
         rows = query(f"SELECT * FROM stations WHERE {where} ORDER BY importance DESC, id LIMIT ?", (*box, limit))
-    return to_stops(rows), total
+    stops = to_stops(rows)
+    if platforms:
+        own = platforms_of([stop["id"] for stop in stops])
+        for stop in stops:
+            stop["platforms"] = own[stop["id"]]
+    return stops, total
 
 
 _importance = {"stamp": None, "values": {}}
@@ -124,11 +187,7 @@ def importance() -> dict:
 
     Kept in memory (a board asks for hundreds of stops at a time) and read
     again when the database file has changed, i.e. after a new import."""
-    try:
-        stat = DB_PATH.stat()
-    except OSError:
-        raise StopsNotImported(str(DB_PATH)) from None
-    stamp = (str(DB_PATH), stat.st_mtime_ns, stat.st_size)
+    stamp = file_stamp()
     with _importance_lock:
         if _importance["stamp"] != stamp:
             _importance["values"] = {row["id"]: row["importance"] for row in query("SELECT id, importance FROM stations")}

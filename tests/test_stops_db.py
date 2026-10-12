@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from collections import Counter
 from contextlib import redirect_stdout
 from datetime import date
 from pathlib import Path
@@ -679,6 +680,129 @@ class CommandTest(DownloadTest):
         self.assertIn("--force", said)
         code, _ = self.run_command("--file", str(self.zip), "--force")
         self.assertEqual(code, 0)
+
+
+# A station with tracks and a bus station next to it, like Ludwigsburg: one
+# track, two bus bays 150 m away, and what stops where.
+HUB = "de:08118:7402"
+HUB_STOPS = [
+    (HUB + ":1:2", "Ludwigsburg Gleis 2", "48.8921", "9.1852", "", "Gleis 2"),
+    (HUB + ":4:1", "Ludwigsburg ZOB Bstg 1", "48.8913", "9.1868", "", "Bstg 1"),
+    (HUB + ":5:15", "Ludwigsburg ZOB Bstg 15", "48.8911", "9.1872", "", "Bstg 15"),
+    (HUB + ":5:20", "Ludwigsburg ZOB", "48.8910", "9.1874", "", ""),   # in the file, never served
+]
+HUB_STOP_TIMES = [("r-re5", HUB + ":1:2"), ("r-57", HUB + ":4:1"), ("r-57", "de:08111:6113:1:2"),
+                  ("r-7343", HUB + ":5:15"), ("r-7343", "de:08315:6232:0:1")]
+
+
+def with_hub(name, text):
+    """The tiny file plus the hub station."""
+    if name == "stops.txt":
+        return table(["stop_id", "stop_code", "stop_name", "stop_lat", "stop_lon", "stop_url", "location_type",
+                      "parent_station", "wheelchair_boarding", "platform_code"],
+                     [(sid, "", stop_name, lat, lon, "", loc, "", "0", "") for sid, stop_name, lat, lon, loc in STOPS]
+                     + [(sid, "", stop_name, lat, lon, "", loc, "", "0", code) for sid, stop_name, lat, lon, loc, code in HUB_STOPS])
+    if name == "stop_times.txt":
+        return table(["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"],
+                     [("t-" + rid, "08:00:00", "08:00:00", sid, i) for i, (rid, sid) in enumerate(STOP_TIMES + HUB_STOP_TIMES)])
+    return text
+
+
+class PlatformTest(StopsDbTestCase):
+    """The platform table, and where a station with tracks and bus bays is put."""
+
+    def setUp(self):
+        super().setUp()
+        self.meta = build(write_gtfs(self.folder / "hub.zip", with_hub))
+        self.http = app.test_client()
+
+    def platforms(self):
+        return {row["id"]: dict(row) for row in store.query("SELECT * FROM platforms")}
+
+    def test_a_station_is_where_its_trains_stop(self):
+        hub = self.stations()[HUB]
+        # on the track, not in the middle between the track and the two bus bays
+        self.assertEqual((hub["lat"], hub["lon"]), (48.8921, 9.1852))
+
+    def test_tracks_before_tram_platforms_before_everything(self):
+        rail, tram, bus = (1.0, 1.0, {"rail": 5}), (2.0, 2.0, {"urban_rail": 9}), (3.0, 3.0, {"bus": 50})
+        both = (4.0, 4.0, {"rail": 1, "bus": 7})
+        self.assertEqual(importer.main_platforms([bus, tram, rail, both]), [rail, both])
+        self.assertEqual(importer.main_platforms([bus, tram]), [tram])
+        self.assertEqual(importer.main_platforms([bus, bus]), [bus, bus])
+        self.assertEqual(importer.main_platforms([]), [])
+
+    def test_one_row_per_served_platform(self):
+        platforms = self.platforms()
+        self.assertEqual({pid for pid in platforms if pid.startswith(HUB)}, {HUB + ":1:2", HUB + ":4:1", HUB + ":5:15"})
+        self.assertEqual(self.meta["platforms"], str(len(platforms)))
+        bay = platforms[HUB + ":5:15"]
+        self.assertEqual((bay["station"], bay["code"], bay["lat"], bay["lon"]), (HUB, "15", 48.8911, 9.1872))
+        self.assertEqual((bay["bus_calls"], bay["rail_calls"], bay["urban_calls"], bay["calls"]), (1, 0, 0, 1))
+        track = platforms[HUB + ":1:2"]
+        self.assertEqual((track["code"], track["rail_calls"], track["bus_calls"]), ("2", 1, 0))
+        # nothing of stations that were left out: unserved, outside the state, unknown to the timetable service
+        self.assertEqual({row["station"] for row in platforms.values()} - set(self.stations()), set())
+        self.assertFalse(any(pid.startswith(GHOST) for pid in platforms))
+
+    def test_which_way_a_bus_platform_s_buses_leave(self):
+        platforms = self.platforms()
+        self.assertEqual(platforms[HUB + ":4:1"]["towards"], "Stuttgart Pragsattel")
+        self.assertEqual(platforms[HUB + ":5:15"]["towards"], "Schluchsee Rathaus")
+        self.assertEqual(platforms[HUB + ":1:2"]["towards"], "")   # a track: trains are not looked at
+        # the 57 runs Pragsattel -> Löwentorbrücke in the tiny timetable
+        self.assertEqual(platforms["de:08111:6113:1:2"]["towards"], "Löwentorbrücke")
+
+    def test_most_common_next_stops(self):
+        names = {"a": "Adlerplatz", "b": "Bahnhof", "c": "Chorweg"}
+        nxt = importer.most_common_next
+        self.assertEqual(nxt(Counter({"a": 6, "b": 3, "c": 2}), names), ["Adlerplatz", "Bahnhof"])   # c: under a quarter
+        self.assertEqual(nxt(Counter({"b": 2, "a": 2}), names), ["Adlerplatz", "Bahnhof"])
+        self.assertEqual(nxt(Counter({"x": 9, "a": 1}), names), ["Adlerplatz"])   # x: not one of our stations
+        self.assertEqual(nxt(Counter(), names), [])
+
+    def test_the_number_on_the_sign(self):
+        for raw, code in (("Bstg 15", "15"), ("Gleis 2(U)", "2(U)"), ("Pos. 3", "3"), ("  Bstg   A ", "A"), ("7 Nord", "7 Nord"),
+                          ("", ""), (None, "")):
+            self.assertEqual(importer.platform_code(raw), code, raw)
+
+    def test_area_endpoint_lists_platforms_on_request(self):
+        box = "9.18,48.89,9.19,48.90"
+        plain = self.http.get(f"/api/v1/stops?bbox={box}").get_json()["stops"]
+        self.assertEqual([stop["id"] for stop in plain], [HUB])
+        self.assertNotIn("platforms", plain[0])
+        (hub,) = self.http.get(f"/api/v1/stops?bbox={box}&platforms=1").get_json()["stops"]
+        self.assertEqual(list(hub), ["id", "name", "lat", "lon", "lines", "kinds", "modes", "platforms"])
+        self.assertEqual(hub["platforms"], [
+            {"id": HUB + ":1:2", "code": "2", "lat": 48.8921, "lon": 9.1852, "kinds": ["rail"], "towards": []},
+            {"id": HUB + ":4:1", "code": "1", "lat": 48.8913, "lon": 9.1868, "kinds": ["bus"], "towards": ["Stuttgart Pragsattel"]},
+            {"id": HUB + ":5:15", "code": "15", "lat": 48.8911, "lon": 9.1872, "kinds": ["bus"], "towards": ["Schluchsee Rathaus"]},
+        ])
+        # a platform without a sign has no code
+        (village,) = self.http.get("/api/v1/stops?bbox=8.17,47.81,8.18,47.82&platforms=1").get_json()["stops"]
+        self.assertEqual([(p["code"], p["kinds"]) for p in village["platforms"]], [(None, ["bus", "other"])])
+
+    def test_a_bus_bay_at_the_edge_of_the_map_brings_its_station(self):
+        # the box holds bay 15 but not the track the station is placed at
+        box = "9.1870,48.8905,9.1880,48.8912"
+        self.assertEqual(self.http.get(f"/api/v1/stops?bbox={box}").get_json()["stops"], [])
+        body = self.http.get(f"/api/v1/stops?bbox={box}&platforms=1").get_json()
+        self.assertEqual(([stop["id"] for stop in body["stops"]], body["total"]), ([HUB], 1))
+        self.assertEqual(len(body["stops"][0]["platforms"]), 3)
+
+    def test_a_database_of_the_old_layout_is_refused(self):
+        self.assertEqual(store.SCHEMA, importer.SCHEMA_VERSION)
+        db = sqlite3.connect(store.DB_PATH)
+        db.execute("UPDATE meta SET value = '2' WHERE key = 'schema'")
+        db.commit()
+        db.close()
+        stat = store.DB_PATH.stat()
+        os.utime(store.DB_PATH, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+        res = self.http.get("/api/v1/stops?bbox=9.0,48.7,9.3,48.9")
+        self.assertEqual((res.status_code, res.get_json()["error"]["code"]), (503, "stops_not_imported"))
+        self.assertIn("import_stops.py", res.get_json()["error"]["message"])
+        # the via stops only need the importance and keep working
+        self.assertTrue(store.importance())
 
 
 class StoreTest(StopsDbTestCase):
