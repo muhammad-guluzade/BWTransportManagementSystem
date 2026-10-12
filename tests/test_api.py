@@ -144,8 +144,11 @@ class DeparturesTest(ApiTestCase):
         self.assertEqual((mode["id"], mode["name"], mode["flat"]), ("regional_train", "Regional train", True))
 
         platform = mode["platforms"][0]
-        self.assertEqual(list(platform), ["code", "name", "area", "departures"])
+        self.assertEqual(list(platform), ["code", "name", "area", "id", "lat", "lon", "towards", "departures"])
         self.assertEqual((platform["code"], platform["name"], platform["area"]), ("3", "Platform 3", None))
+        # the platform as a place: its own id, where it is, where its trains go next
+        self.assertEqual((platform["id"], platform["lat"], platform["lon"]), (STOP + ":3:3", 48.784729, 9.183172))
+        self.assertEqual(platform["towards"], ["Plochingen"])
 
         departure = platform["departures"][0]
         self.assertEqual(list(departure), ["id", "line", "destination", "via", "dticket", "time", "planned", "minutes",
@@ -182,6 +185,31 @@ class DeparturesTest(ApiTestCase):
             self.assertEqual(via, ["Plochingen", "Geislingen (Steige)"])
         finally:
             departures.stop_importance = original
+
+    def test_two_bus_bays_with_the_same_number_are_two_platforms(self):
+        # like Reutlingen Hbf/Listplatz: no signposted names, and the timetable
+        # service numbers both bays "1"
+        def bus(bay, coord, minute, next_name):
+            location = {"id": f"{STOP}:{bay}:1", "name": "Stuttgart Hauptbahnhof (oben)", "type": "platform", "coord": coord,
+                        "properties": {"platform": "1"}, "parent": EVENT["location"]["parent"]}
+            return {"location": location, "departureTimePlanned": f"2026-10-01T08:{minute:02d}:00Z",
+                    "transportation": {"id": f"bus:{bay}", "disassembledName": "42", "product": {"class": 5, "name": "Bus"},
+                                       "destination": {"name": "Endstation"}, "properties": {"tripCode": minute}},
+                    "onwardLocations": [{**platform_of("de:08111:1", next_name, "1"), "productClasses": [5]},
+                                        {**platform_of("de:08111:2", "Endstation", "1"), "productClasses": [5]}]}
+        self.events = [bus(1, [48.78470, 9.18310], 1, "Schlossplatz"), bus(1, [48.78470, 9.18310], 11, "Schlossplatz"),
+                       bus(2, [48.78490, 9.18330], 5, "Neckartor")]
+        self.station = {"locations": [{**STATION["locations"][0], "assignedStops": [
+            {"id": STOP, "name": "Stuttgart Hauptbahnhof (oben)", "productClasses": [5]}]}]}
+        client.get_departures = lambda stop_id, classes=(), **kw: {"stopEvents": self.events} if stop_id == STOP else {}
+        mode = self.get().get_json()["modes"][0]
+        self.assertFalse(mode["flat"])
+        self.assertEqual([(p["name"], p["id"], p["towards"], len(p["departures"])) for p in mode["platforms"]], [
+            ("Platform 1 · towards Schlossplatz", STOP + ":1:1", ["Schlossplatz"], 2),
+            ("Platform 1 · towards Neckartor", STOP + ":2:1", ["Neckartor"], 1),
+        ])
+        self.assertEqual([(p["lat"], p["lon"]) for p in mode["platforms"]], [(48.7847, 9.1831), (48.7849, 9.1833)])
+        self.assertEqual({p["code"] for p in mode["platforms"]}, {"1"})
 
     def test_unknown_tab_falls_back_to_the_first(self):
         self.assertEqual(self.get("?tab=nonsense").get_json()["tab"], "trains")

@@ -238,6 +238,10 @@ and one departure)
           "code": "2",
           "name": "Platform 2",
           "area": null,
+          "id": "de:08111:6115:2:2",
+          "lat": 48.784865,
+          "lon": 9.182384,
+          "towards": ["Bad Cannstatt"],
           "departures": [
             {
               "id": "MjAyNi0xMC0wMVQyMjozNDowMFp8ZGU6MDgxMTE6NjExNToyOjJ8ZGRiOjkwUjkwOiA6SDpqMjZ8MTk5MzQ",
@@ -290,8 +294,11 @@ Tab ids: `trains`, `sbahn`, `tram`, `bus`, `ferry`, `cablecar`, `other`.
 | Field | |
 |---|---|
 | `code` | The bare platform (`"3"`, `"A"`, `"4 Nord"`, `"1(U)"`), or `null` if unknown. |
-| `name` | Display text: `"Platform 3"`, `"Unknown platform"`. If two different platforms of a station share a code, the part of the station is appended (`"Platform A · Hauptbahnhof Süd"`). |
+| `name` | Display text: `"Platform 3"`, `"Unknown platform"`. If two different platforms of a station share a code, what tells them apart is appended: the part of the station (`"Platform A · Hauptbahnhof Süd"`), or where their services go next (`"Platform 1 · towards Hbf/U.d.Linden or Stadtmitte"`). |
 | `area` | That part of the station, when it was needed to tell platforms apart; otherwise `null`. |
+| `id` | The platform as a place: the timetable service's id of it, e.g. `"de:08118:7402:5:15"`. Platforms with the same `code` differ in it (two bus bays both numbered 1). The same platform can appear under several modes, with the same `id`. `null` if unknown. |
+| `lat`, `lon` | Where the platform is, to show it on a map. `null` if the timetable service gives no position. |
+| `towards` | Where the departures listed here go next: the one or two most common next stops (`["Hbf/U.d.Linden", "Stadtmitte"]`). Can be empty. It describes the departures in this response, so it can change over the day. |
 | `departures` | Sorted by departure time. Up to the next 100 departures of the tab are loaded in total. |
 
 **`modes[].platforms[].departures[]`**

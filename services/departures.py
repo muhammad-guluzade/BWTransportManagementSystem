@@ -1,10 +1,12 @@
 """Departure board: one station's upcoming departures for one transport type
 (tab), grouped by mode, then by platform within each mode."""
 import logging
+import math
 import re
 import sqlite3
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -150,8 +152,78 @@ def dedupe(departures: list) -> list:
     return list(kept.values())
 
 
+# two platform positions this close are one place to stand
+SAME_SPOT_METRES = 5
+# what a departure row carries only for the grouping
+PLATFORM_FIELDS = ("mode", "platform", "platform_code", "platform_area", "platform_id", "platform_lat", "platform_lon",
+                   "platform_named", "platform_moved", "next_stop")
+
+
+def metres(a: tuple, b: tuple) -> float:
+    """Distance between two (lat, lon) positions; exact enough within a station."""
+    return 111_000 * math.hypot(a[0] - b[0], (a[1] - b[1]) * math.cos(math.radians(a[0])))
+
+
+def position(dep: dict) -> tuple | None:
+    lat, lon = dep.get("platform_lat"), dep.get("platform_lon")
+    return None if lat is None or lon is None else (lat, lon)
+
+
+def split_platforms(rows: list) -> list:
+    """The departures under one platform label, as one list per physical
+    platform.
+
+    A label that is the name on the signs ("Gleis 7 Süd") is one platform,
+    whatever ids EFA attaches to it: trains moved to another platform keep
+    the planned one's id, and some stations are in the data twice. A label
+    that is only EFA's internal number is not: two bus bays of one station
+    can both be number 1. Those are told apart by their ids, unless they sit
+    on the same spot."""
+    together = [dep for dep in rows if dep.get("platform_named") or not dep.get("platform_id") or position(dep) is None]
+    groups = []  # [{"spots": [(lat, lon)], "rows": [...]}]
+    if together:
+        groups.append({"spots": [spot for spot in map(position, together) if spot], "rows": together})
+
+    by_id = {}
+    for dep in rows:
+        if not any(dep is other for other in together):
+            by_id.setdefault(dep["platform_id"], []).append(dep)
+    # the busiest first, so that a stray id joins the main platform and not the other way round
+    for platform_id, members in sorted(by_id.items(), key=lambda item: (-len(item[1]), item[0])):
+        spot = position(members[0])
+        home = next((g for g in groups if any(metres(spot, other) <= SAME_SPOT_METRES for other in g["spots"])), None)
+        if home:
+            home["rows"] += members
+            home["spots"].append(spot)
+        else:
+            groups.append({"spots": [spot], "rows": members})
+    return [group["rows"] for group in groups]
+
+
+def platform_place(rows: list) -> tuple:
+    """(id, lat, lon) of the platform these departures leave from: the id most
+    of them carry, not counting trains that were moved here from elsewhere."""
+    ids = Counter(dep["platform_id"] for dep in rows if dep.get("platform_id") and not dep.get("platform_moved"))
+    ids = ids or Counter(dep["platform_id"] for dep in rows if dep.get("platform_id"))
+    if not ids:
+        return None, None, None
+    most = max(ids.values())
+    platform_id = min(pid for pid, n in ids.items() if n == most)
+    spot = next((position(dep) for dep in rows if dep.get("platform_id") == platform_id and position(dep)), None)
+    return (platform_id, *(spot or (None, None)))
+
+
+def towards(rows: list) -> list:
+    """Where the departures of a platform go next: the one or two most common
+    next stops, each for at least a quarter of the departures."""
+    counts = Counter(dep["next_stop"] for dep in rows if dep.get("next_stop"))
+    total = sum(counts.values())
+    return [name for name, n in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:2] if n * 4 >= total]
+
+
 def group_departures(departures: list) -> list:
-    """[{id, name, flat, platforms: [{code, name, area, departures: [...]}]}].
+    """[{id, name, flat, platforms: [{code, name, area, id, lat, lon, towards,
+    departures: [...]}]}].
 
     `name` is display text; `id` / `code` are the stable values behind it,
     for clients that build their own labels. Lists rather than dicts so the
@@ -166,21 +238,38 @@ def group_departures(departures: list) -> list:
 
     modes = []
     for mode in sorted(grouped, key=mode_sort_key):
-        by_platform = grouped[mode]
-        labels = [label for label, _ in by_platform]
+        found = []  # (label, sub-stop, id, lat, lon, towards, rows), one per physical platform
+        for (label, area), rows in grouped[mode].items():
+            for part in split_platforms(rows):
+                found.append((label, area, *platform_place(part), towards(part), part))
+        areas_of = {}
+        twins = Counter()
+        for label, area, *_ in found:
+            areas_of.setdefault(label, set()).add(area)
+            twins[(label, area)] += 1
 
         platforms = []
-        for label, area in sorted(by_platform, key=lambda k: (platform_sort_key(k[0]), k[1])):
-            # only spell out the sub-stop when the label alone is ambiguous
-            ambiguous = labels.count(label) > 1 and area
-            rows = sorted(by_platform[(label, area)], key=lambda d: (d["minutes"] is None, d["minutes"]))
+        for label, area, platform_id, lat, lon, heading, rows in sorted(
+                found, key=lambda f: (platform_sort_key(f[0]), f[1], f[2] or "")):
+            # only spell out what is needed to tell this platform from the others
+            show_area = bool(area) and len(areas_of[label]) > 1
+            name = f"{label} · {area}" if show_area else label
+            if twins[(label, area)] > 1 and heading:
+                # "or": stop names have commas of their own ("Sinsheim, Egerlandstraße")
+                name += " · towards " + " or ".join(heading)
+            rows = sorted(rows, key=lambda d: (d["minutes"] is None, d["minutes"]))
             code = rows[0]["platform_code"]
             for row in rows:
-                del row["mode"], row["platform"], row["platform_code"], row["platform_area"]
+                for field in PLATFORM_FIELDS:
+                    row.pop(field, None)
             platforms.append({
                 "code": code,
-                "name": f"{label} · {area}" if ambiguous else label,
-                "area": area if ambiguous else None,
+                "name": name,
+                "area": area if show_area else None,
+                "id": platform_id,
+                "lat": lat,
+                "lon": lon,
+                "towards": heading,
                 "departures": rows,
             })
 

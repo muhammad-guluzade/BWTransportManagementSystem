@@ -328,6 +328,25 @@ def passed_not_served(location: dict, mode: str) -> bool:
     return bool(arrival) and arrival == location.get("departureTimePlanned")
 
 
+def not_on_the_way(onward_location: dict, name: str, mode: str) -> bool:
+    """Entries of a trip's stop list where nobody gets on or off."""
+    return bool(NOT_A_STOP.search(name) or passed_not_served(onward_location, mode)
+                or (mode in RAIL_MODES and BORDER_POINT.search(name)))
+
+
+def next_stop(event: dict) -> str | None:
+    """The first stop after this station: which way the vehicle leaves.
+    None at the end of a trip."""
+    here = event.get("location") or {}
+    here_name = station_of(here).get("name")
+    mode = mode_group(event.get("transportation") or {})
+    for o in event.get("onwardLocations") or []:
+        name = onward_name(o)
+        if name and name != here_name and not not_on_the_way(o, name, mode):
+            return short_name(name, locality(here))
+    return None
+
+
 def via_stops(event: dict, importance: dict | None = None, horizon: int = 8, count: int = 2) -> list:
     """Major stops one departure calls at next, e.g. U6 to Gerlingen from
     Pragfriedhof -> ['Pragsattel', 'Feuerbach Bf'].
@@ -354,9 +373,7 @@ def via_stops(event: dict, importance: dict | None = None, horizon: int = 8, cou
     reached = False
     for o in event.get("onwardLocations") or []:
         name = onward_name(o)
-        if not name or name == here_name or NOT_A_STOP.search(name) or any(name == n for n, _ in stops):
-            continue
-        if passed_not_served(o, mode) or (mode in RAIL_MODES and BORDER_POINT.search(name)):
+        if not name or name == here_name or not_on_the_way(o, name, mode) or any(name == n for n, _ in stops):
             continue
         if signed and (name == signed or short_name(name, city) == destination):
             # vehicles often carry on past what their sign says (to the depot,
@@ -516,6 +533,9 @@ def parse_departure(event: dict, now: datetime | None = None, importance: dict |
     estimated = parse_time(event.get("departureTimeEstimated"))
     actual = estimated or planned
     destination = short_name((transportation.get("destination") or {}).get("name") or "?", city)
+    properties = location.get("properties") or {}
+    signposted = (properties.get("platformName") or "").strip()
+    platform_lat, platform_lon = lat_lon(location.get("coord"))
 
     return {
         "id": departure_id(event),
@@ -524,6 +544,17 @@ def parse_departure(event: dict, now: datetime | None = None, importance: dict |
         "platform_code": platform_code(location),
         # sub-stop the platform belongs to, e.g. "Hauptbahnhof (tief)"
         "platform_area": short_name(location.get("name") or "", city),
+        # The platform as a place. EFA's own id of it, and whether the label is
+        # the name on the signs ("Gleis 7 Süd") or only EFA's internal number:
+        # a signposted name is the same platform whatever the id says, an
+        # internal number means nothing without the id.
+        "platform_id": location.get("id"),
+        "platform_lat": platform_lat,
+        "platform_lon": platform_lon,
+        "platform_named": bool(signposted),
+        # moved to another platform today; the id still is the planned one's
+        "platform_moved": bool(signposted) and (properties.get("plannedPlatformName") or signposted).strip() != signposted,
+        "next_stop": next_stop(event),
         "line": line_name(transportation),
         "destination": destination,
         # on ring lines the sign on the vehicle names a stop on the way, not

@@ -45,7 +45,12 @@ input[type=text] { width: 100%; padding: 10px; font-size: 1rem; box-sizing: bord
 
 /* departure board */
 .platform-block { margin-top: 10px; border: 1px solid #ddd; border-radius: 6px; overflow: hidden; }
-.platform-title { font-weight: bold; background: #333; color: white; padding: 8px 12px; }
+.platform-title { font-weight: bold; background: #333; color: white; padding: 8px 12px; cursor: pointer; }
+.platform-title:hover { background: #444; }
+/* the hint is not part of the heading's text, so it lives here */
+.platform-title::after { content: 'show on map'; float: right; font-weight: normal; font-size: 0.75rem; line-height: 1.5rem; opacity: 0.65; }
+.platform-title.marked { background: #111; }
+.platform-title.marked::after { content: 'shown on map \2715'; opacity: 1; }
 .mode-section { margin-top: 28px; }
 .mode-section:first-of-type { margin-top: 20px; }
 .mode-header { font-size: 1.05rem; font-weight: bold; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 3px solid #999; color: #333; }
@@ -69,6 +74,12 @@ tr:last-child td { border-bottom: none; }
 .minutes { color: #666; text-align: right; white-space: nowrap; width: 1%; }
 tr.cancelled .destination, tr.cancelled .via { text-decoration: line-through; color: #999; }
 tr.cancelled .line-badge { background: #999; }
+/* the platform marked on the map: a dark pin with the platform's number, if it has one */
+.platform-mark { background: none; border: none; }
+.platform-pin { position: absolute; transform: translate(-50%, -50%); box-sizing: border-box; min-width: 24px; height: 24px; padding: 0 6px;
+  border: 3px solid white; border-radius: 12px; background: #111; color: white; font: bold 11px/18px system-ui, sans-serif;
+  text-align: center; white-space: nowrap; box-shadow: 0 0 0 2px #111, 0 2px 6px rgba(0, 0, 0, 0.5); }
+
 /* a click on a departure lists its stops under it */
 tr.departure { cursor: pointer; }
 tr.departure:hover td { background: #f5f8fc; }

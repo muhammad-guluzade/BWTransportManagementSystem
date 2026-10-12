@@ -24,6 +24,9 @@
   const MAX_STOPS = 150;
   // how far to zoom in when a stop is picked from the search
   const STOP_ZOOM = 15;
+  // ... and when one platform of it is to be shown: close enough to tell
+  // platforms 20 metres apart from each other
+  const PLATFORM_ZOOM = 17;
   // marker colours per kind of transport, most important first; a stop gets the
   // colour of the first one that serves it (the legend in index.html matches)
   const MODE_COLOURS = [['rail', '#c1121c'], ['sbahn', '#2e8b47'], ['ubahn', '#005aa9'], ['tram', '#e07b00'], ['bus', '#a1338f']];
@@ -49,8 +52,10 @@
 
   const stopsLayer = L.layerGroup().addTo(map);
   const selectedLayer = L.layerGroup().addTo(map);
+  const platformLayer = L.layerGroup().addTo(map);
   let requestCounter = 0;   // to ignore answers that arrive out of order
   let selectedId = null;
+  let platformMark = null;  // the platform marked right now: {id, code, lat, lon}
 
   // the map measures its box once; measure again whenever the layout changes it
   new ResizeObserver(() => map.invalidateSize()).observe(document.getElementById('map'));
@@ -136,6 +141,30 @@
   });
   loadStops();
 
+  // departures.js says which platform to mark (its heading or one of its
+  // departures was clicked), or null to take the mark away
+  document.addEventListener('platform-marked', (e) => {
+    const platform = e.detail.platform;
+    platformLayer.clearLayers();
+    platformMark = null;
+    if (!platform || platform.lat === null || platform.lon === null) return;
+
+    const at = L.latLng(platform.lat, platform.lon);
+    const pin = document.createElement('span');
+    pin.className = 'platform-pin';
+    pin.textContent = platform.code || '';
+    L.marker(at, {
+      icon: L.divIcon({ className: 'platform-mark', html: pin, iconSize: [0, 0] }),
+      interactive: false, keyboard: false, zIndexOffset: 1000,
+    }).addTo(platformLayer);
+    platformMark = { id: platform.id, code: platform.code, lat: platform.lat, lon: platform.lon };
+
+    // go there only if it can't be seen as it is: too far out to tell the
+    // platforms apart, or outside the picture
+    if (map.getZoom() < PLATFORM_ZOOM) map.setView(at, PLATFORM_ZOOM);
+    else if (!map.getBounds().pad(-0.1).contains(at)) map.panTo(at);
+  });
+
   // departures.js announces the stop it is showing
   document.addEventListener('stop-shown', (e) => {
     const { stop, source } = e.detail;
@@ -171,5 +200,5 @@
   }
 
   // for looking at the map from the browser console
-  window.stopMap = { map, stopsLayer, selectedId: () => selectedId };
+  window.stopMap = { map, stopsLayer, selectedId: () => selectedId, platformMark: () => platformMark };
 })();

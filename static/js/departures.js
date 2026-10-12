@@ -35,6 +35,11 @@ let openTripError = '';
 let showEarlier = false;       // the stops it has come from are shown as well
 let openShown = false;         // its row was found while drawing the board
 
+// The platform marked on the map: the one whose heading or departure was
+// clicked last. map.js draws the mark when it hears 'platform-marked'.
+let markedPlatform = null;     // its key, see platformKey()
+let markShown = false;         // it was found while drawing the board
+
 // departure times arrive in UTC; show them in local German time
 const timeFormat = new Intl.DateTimeFormat('de-DE', {
   hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin',
@@ -106,6 +111,7 @@ function selectStop(id, name, source = 'search') {
   currentTab = '';
   shownCount.clear();
   closeStops();
+  clearPlatformMark();
   stationBox.innerHTML = '';
   board.innerHTML = '';
   rawBox.innerHTML = '';
@@ -120,6 +126,7 @@ function selectTab(tabId) {
   currentTab = tabId;
   shownCount.clear();
   closeStops();
+  clearPlatformMark();
   board.innerHTML = '';
   status.textContent = 'Loading...';
   loadDepartures();
@@ -157,11 +164,35 @@ async function loadDepartures() {
 
 function render() {
   openShown = false;
+  markShown = false;
   renderStation(lastData);
   renderBoard(lastData);
   // the departure whose stops were open is no longer on the board (it has left)
   if (openDeparture && !openShown) closeStops();
+  // ... and so is the marked platform, once nothing departs from it any more
+  if (markedPlatform && !markShown) clearPlatformMark();
   renderRaw();
+}
+
+// what tells one platform of the board from the others: two platforms can
+// share a name (two bus bays numbered 1), and two names can share a place
+function platformKey(mode, platform) {
+  return `${mode.id}|${platform.id}|${platform.name}`;
+}
+
+function markPlatform(mode, platform) {
+  if (platform.lat === null || platform.lon === null) {
+    clearPlatformMark();  // the timetable service doesn't say where it is
+    return;
+  }
+  markedPlatform = platformKey(mode, platform);
+  document.dispatchEvent(new CustomEvent('platform-marked', { detail: { platform } }));
+}
+
+function clearPlatformMark() {
+  if (markedPlatform === null) return;
+  markedPlatform = null;
+  document.dispatchEvent(new CustomEvent('platform-marked', { detail: { platform: null } }));
 }
 
 function closeStops() {
@@ -172,15 +203,18 @@ function closeStops() {
   showEarlier = false;
 }
 
-// a click on a departure lists its stops under it; a second click closes the list
-function toggleStops(dep) {
+// a click on a departure lists its stops under it and marks its platform on
+// the map; a second click closes the list and takes the mark away
+function toggleStops(dep, mode, platform) {
   if (openDeparture === dep.id) {
     closeStops();
+    if (markedPlatform === platformKey(mode, platform)) clearPlatformMark();
     render();
     return;
   }
   closeStops();
   openDeparture = dep.id;
+  markPlatform(mode, platform);
   render();
   loadStops();
 }
@@ -359,12 +393,12 @@ function renderStops() {
   return row;
 }
 
-function renderDeparture(dep) {
+function renderDeparture(dep, mode, platform) {
   const row = el('tr', dep.cancelled ? 'cancelled' : '');
   row.classList.add('departure');
   if (dep.id === openDeparture) row.classList.add('open');
-  row.title = dep.id === openDeparture ? 'Hide the stops' : 'Show the stops';
-  row.onclick = () => toggleStops(dep);
+  row.title = dep.id === openDeparture ? 'Hide the stops' : 'Show the stops, and the platform on the map';
+  row.onclick = () => toggleStops(dep, mode, platform);
 
   const lineCell = el('td', 'line-cell');
   lineCell.appendChild(el('span', 'line-badge', dep.line));
@@ -401,17 +435,27 @@ function formatWait(minutes) {
 
 function renderPlatform(mode, platform) {
   const block = el('div', 'platform-block');
+  const key = platformKey(mode, platform);
+  const marked = key === markedPlatform;
+  if (marked) markShown = true;
   if (!mode.flat) {
-    block.appendChild(el('div', 'platform-title', platform.name));
+    // the heading shows the platform on the map; its hint text is in the stylesheet
+    const title = el('div', marked ? 'platform-title marked' : 'platform-title', platform.name);
+    title.title = marked ? 'Take the mark off the map' : 'Show this platform on the map';
+    title.onclick = () => {
+      if (marked) clearPlatformMark();
+      else markPlatform(mode, platform);
+      render();
+    };
+    block.appendChild(title);
   }
 
-  const key = `${mode.id}|${platform.name}`;
   const count = Math.min(shownCount.get(key) || PER_PLATFORM, platform.departures.length);
   const hidden = platform.departures.length - count;
 
   const table = el('table');
   platform.departures.slice(0, count).forEach(dep => {
-    table.appendChild(renderDeparture(dep));
+    table.appendChild(renderDeparture(dep, mode, platform));
     if (dep.id === openDeparture && !openShown) {
       openShown = true;
       table.appendChild(renderStops());

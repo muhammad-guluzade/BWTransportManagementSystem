@@ -606,6 +606,125 @@ class TripTest(unittest.TestCase):
         self.assertEqual((trip["previous"], trip["onward"]), ([], []))
 
 
+class PlatformPlaceTest(unittest.TestCase):
+    """Which departures leave from the same physical platform, where it is and
+    which way its services go."""
+
+    HERE = (48.494959, 9.210220)
+
+    def dep(self, pid, at=None, label="Platform 1", named=False, moved=False, towards="Stadtmitte", minutes=5, mode="Bus",
+            area="Hbf/Listplatz"):
+        lat, lon = at or (None, None)
+        return {"id": f"{pid}-{minutes}", "mode": mode, "platform": label, "platform_code": label.replace("Platform ", ""),
+                "platform_area": area, "platform_id": pid, "platform_lat": lat, "platform_lon": lon,
+                "platform_named": named, "platform_moved": moved, "next_stop": towards, "minutes": minutes, "line": "1"}
+
+    def north(self, metres):
+        return (self.HERE[0] + metres / 111_000, self.HERE[1])
+
+    def platforms(self, deps):
+        modes = group_departures(deps)
+        self.assertEqual(len(modes), 1)
+        return modes[0]["platforms"]
+
+    def test_two_bays_with_the_same_internal_number(self):
+        # Reutlingen Hbf/Listplatz: both bays are "1" to the timetable service, 17 m apart
+        deps = ([self.dep("s:1:1", self.HERE, towards="Hbf/U.d.Linden", minutes=m) for m in (1, 2, 3)]
+                + [self.dep("s:1:1", self.HERE, towards="Stadtmitte", minutes=m) for m in (4, 5)]
+                + [self.dep("s:2:1", self.north(17), towards="Bismarckstr.", minutes=m) for m in (6, 7, 8)]
+                + [self.dep("s:2:1", self.north(17), towards="Stadtmitte", minutes=9)])
+        first, second = self.platforms(deps)
+        self.assertEqual((first["name"], first["id"], first["towards"]),
+                         ("Platform 1 · towards Hbf/U.d.Linden or Stadtmitte", "s:1:1", ["Hbf/U.d.Linden", "Stadtmitte"]))
+        self.assertEqual((second["name"], second["id"], second["towards"]),
+                         ("Platform 1 · towards Bismarckstr. or Stadtmitte", "s:2:1", ["Bismarckstr.", "Stadtmitte"]))
+        self.assertEqual((first["lat"], first["lon"]), self.HERE)
+        self.assertEqual((second["lat"], second["lon"]), self.north(17))
+        self.assertEqual((len(first["departures"]), len(second["departures"])), (5, 4))
+        self.assertEqual((first["code"], first["area"], second["code"], second["area"]), ("1", None, "1", None))
+        # nothing of the bookkeeping reaches the rows
+        self.assertEqual(set(first["departures"][0]), {"id", "minutes", "line"})
+
+    def test_a_signposted_platform_is_one_platform_whatever_the_ids(self):
+        # Ulm Hbf "7 Süd" comes under two ids 20 m apart; Karlsruhe's tunnel stops are in the data twice
+        deps = [self.dep("s:34:7", self.HERE, "Platform 7 Süd", named=True, minutes=m, mode="Regional train") for m in (1, 2, 3)]
+        deps += [self.dep("s:33:4", self.north(20), "Platform 7 Süd", named=True, minutes=9, mode="Regional train")]
+        (only,) = self.platforms(deps)
+        self.assertEqual((only["name"], only["id"], len(only["departures"])), ("Platform 7 Süd", "s:34:7", 4))
+        self.assertEqual((only["lat"], only["lon"]), self.HERE)
+
+    def test_a_train_moved_here_does_not_decide_where_the_platform_is(self):
+        # Aalen: platform 5 has its own trains (id ...:5) and one moved over from platform 4 (id ...:4)
+        own = [self.dep("s:4:5", self.north(9), "Platform 5", named=True, minutes=20, mode="Regional train")]
+        moved = [self.dep("s:4:4", self.HERE, "Platform 5", named=True, moved=True, minutes=m, mode="Regional train") for m in (1, 2)]
+        (only,) = self.platforms(moved + own)
+        self.assertEqual((only["id"], only["lat"], only["lon"], len(only["departures"])), ("s:4:5", *self.north(9), 3))
+        # only moved trains: better their planned platform than no position at all
+        (only,) = self.platforms([self.dep("s:4:4", self.HERE, "Platform 5", named=True, moved=True, mode="Regional train")])
+        self.assertEqual(only["id"], "s:4:4")
+
+    def test_the_same_spot_is_the_same_platform(self):
+        # Zwingenberg: one S-Bahn departure came without the signposted name, from the very same place
+        deps = [self.dep("s:2:2", self.HERE, "Platform 2", named=True, minutes=m, mode="S-Bahn") for m in (1, 2, 3)]
+        deps += [self.dep("s:9:2", self.north(4), "Platform 2", minutes=4, mode="S-Bahn")]
+        (only,) = self.platforms(deps)
+        self.assertEqual((only["name"], only["id"], len(only["departures"])), ("Platform 2", "s:2:2", 4))
+        # two unnamed ids five metres apart, too
+        deps = [self.dep("s:1:1", self.HERE, minutes=1), self.dep("s:1:1", self.HERE, minutes=2), self.dep("s:2:1", self.north(5), minutes=3)]
+        (only,) = self.platforms(deps)
+        self.assertEqual((only["name"], only["id"]), ("Platform 1", "s:1:1"))
+        # ... and six metres apart they are two
+        deps = [self.dep("s:1:1", self.HERE, minutes=1), self.dep("s:2:1", self.north(6), minutes=3)]
+        self.assertEqual(len(self.platforms(deps)), 2)
+
+    def test_without_id_or_position_nothing_is_split(self):
+        deps = [self.dep(None, None, minutes=1), self.dep("s:1:1", None, minutes=2), self.dep("s:2:1", None, minutes=3)]
+        (only,) = self.platforms(deps)
+        self.assertEqual((only["name"], only["lat"], only["lon"], len(only["departures"])), ("Platform 1", None, None, 3))
+        self.assertEqual(only["id"], "s:1:1")
+        (only,) = self.platforms([self.dep(None, None)])
+        self.assertEqual((only["id"], only["lat"], only["lon"]), (None, None, None))
+
+    def test_parts_of_a_station_are_still_told_apart_by_their_name(self):
+        deps = [self.dep("s:1:1", self.HERE, "Platform A", area="Hauptbahnhof", minutes=1),
+                self.dep("s:5:1", self.north(200), "Platform A", area="Hauptbahnhof Süd", minutes=2)]
+        first, second = self.platforms(deps)
+        self.assertEqual((first["name"], first["area"]), ("Platform A · Hauptbahnhof", "Hauptbahnhof"))
+        self.assertEqual((second["name"], second["area"]), ("Platform A · Hauptbahnhof Süd", "Hauptbahnhof Süd"))
+
+    def test_towards(self):
+        from services.departures import towards
+        rows = [{"next_stop": name} for name in ["A"] * 6 + ["B"] * 3 + ["C"] * 2 + [None]]
+        self.assertEqual(towards(rows), ["A", "B"])           # C is under a quarter
+        self.assertEqual(towards([{"next_stop": "B"}, {"next_stop": "A"}]), ["A", "B"])  # equals in alphabetical order
+        self.assertEqual(towards([{"next_stop": None}, {}]), [])
+        # no direction known: the twins simply keep the same name, the map tells them apart
+        deps = [self.dep("s:1:1", self.HERE, towards=None, minutes=1), self.dep("s:2:1", self.north(17), towards=None, minutes=2)]
+        self.assertEqual([p["name"] for p in self.platforms(deps)], ["Platform 1", "Platform 1"])
+        # one platform alone needs no direction in its name, but says it in `towards`
+        (only,) = self.platforms([self.dep("s:1:1", self.HERE, towards="Stadtmitte")])
+        self.assertEqual((only["name"], only["towards"]), ("Platform 1", ["Stadtmitte"]))
+
+    def test_what_a_departure_knows_about_its_platform(self):
+        def event(properties, onward_stops=("Stuttgart, Löwentorbrücke", "Gerlingen"), cls=3):
+            return {"location": {**platform(), "id": "de:08111:115:1:2", "coord": [48.80, 9.18], "properties": properties},
+                    "departureTimePlanned": "2026-10-01T08:00:00Z",
+                    "transportation": {**transport(cls), "disassembledName": "U6", "destination": {"name": "Gerlingen"}},
+                    "onwardLocations": [onward(name, [3]) for name in onward_stops]}
+        dep = parse.parse_departure(event({"platform": "2", "platformName": "Gleis 2", "plannedPlatformName": "Gleis 2"}))
+        self.assertEqual((dep["platform_id"], dep["platform_lat"], dep["platform_lon"]), ("de:08111:115:1:2", 48.80, 9.18))
+        self.assertEqual((dep["platform_named"], dep["platform_moved"], dep["next_stop"]), (True, False, "Löwentorbrücke"))
+        # only the timetable service's own number
+        dep = parse.parse_departure(event({"platform": "2"}))
+        self.assertEqual((dep["platform"], dep["platform_named"], dep["platform_moved"]), ("Platform 2", False, False))
+        # moved to another platform today
+        dep = parse.parse_departure(event({"platform": "4", "platformName": "5", "plannedPlatformName": "4"}))
+        self.assertEqual((dep["platform"], dep["platform_named"], dep["platform_moved"]), ("Platform 5", True, True))
+        # the end of the line, and a list that starts with this station again
+        self.assertIsNone(parse.parse_departure(event({"platform": "2"}, onward_stops=()))["next_stop"])
+        self.assertEqual(parse.next_stop(event({}, onward_stops=("Pragfriedhof", "Heidelberg, Post Waypoint", "Killesberg"))), "Killesberg")
+
+
 class GroupingTest(unittest.TestCase):
     def dep(self, mode, platform_name, minutes, area="Hbf"):
         code = None if platform_name == "Unknown platform" else platform_name.replace("Platform ", "")
