@@ -725,6 +725,64 @@ class PlatformPlaceTest(unittest.TestCase):
         self.assertEqual(parse.next_stop(event({}, onward_stops=("Pragfriedhof", "Heidelberg, Post Waypoint", "Killesberg"))), "Killesberg")
 
 
+class SecondTimetableTest(unittest.TestCase):
+    """Near the Swiss border EFA also has the Swiss timetable's copy of a train."""
+
+    def test_line_from_the_number_when_the_label_is_missing(self):
+        swiss = {"number": "S14", "name": "S-Bahn S14", "product": {"class": 1}, "properties": {"trainType": "S", "trainNumber": "23811"}}
+        self.assertEqual(parse.line_name(swiss), "S14")          # not "S 23811"
+        bus = {"number": "908", "name": "Bus 908", "properties": {"trainType": "B", "trainNumber": "90801"}}
+        self.assertEqual(parse.line_name(bus), "908")
+        # long-distance trains: the number IS the train number
+        ice = {"number": "101", "name": "ICE 101 InterCityExpress", "properties": {"trainType": "ICE", "trainNumber": "101"}}
+        self.assertEqual(parse.line_name(ice), "ICE 101")
+        self.assertEqual(parse.line_name({"number": "ICE 1291", "properties": {"trainType": "ICE", "trainNumber": 1291}}), "ICE 1291")
+        self.assertEqual(parse.line_name({"number": "19", "name": "Regionalbus 19"}), "19")
+        self.assertEqual(parse.line_name({"disassembledName": "S27", "number": "S27", "properties": {"trainType": "S", "trainNumber": "20723"}}), "S27")
+        self.assertEqual(parse.line_name({}), "?")
+
+    def dep(self, line="S27", platform="5", planned="2026-10-17T03:35:00Z", destination="Baden", realtime=False, mode="S-Bahn"):
+        return {"mode": mode, "platform": f"Platform {platform}" if platform else parse.UNKNOWN_PLATFORM, "platform_code": platform,
+                "platform_area": "Bahnhof", "line": line, "destination": destination, "planned": planned, "realtime": realtime}
+
+    def test_the_copy_without_a_platform_goes(self):
+        from services.departures import dedupe
+        own, copy = self.dep(), self.dep(platform=None)
+        self.assertEqual(dedupe([copy, own]), [own])
+        self.assertEqual(dedupe([own, copy]), [own])
+        # even if only the copy has live data: the platform is worth more to someone at the station
+        self.assertEqual(dedupe([own, self.dep(platform=None, realtime=True)]), [own])
+
+    def test_what_is_not_a_copy_stays(self):
+        from services.departures import dedupe
+        alone = self.dep(platform=None)
+        self.assertEqual(dedupe([alone]), [alone])                       # no platform known at all: still a departure
+        for other in (self.dep(line="S36"), self.dep(destination="Basel"), self.dep(planned="2026-10-17T04:05:00Z"), self.dep(mode="Bus")):
+            self.assertEqual(len(dedupe([alone, other])), 2, other)
+        # two platforms at the same minute are two departures
+        self.assertEqual(len(dedupe([self.dep(), self.dep(platform="6")])), 2)
+
+    def test_replacement_bus(self):
+        sev = {"number": "SEV", "disassembledName": "SEV", "product": {"class": 13, "name": "Ersatzverkehr"},
+               "properties": {"trainName": "Schienenersatzverkehr", "trainType": "BSV", "trainNumber": "80080"}}
+        self.assertTrue(parse.is_replacement(sev))
+        self.assertTrue(parse.is_replacement({"disassembledName": "SEV S41", "product": {"class": 17, "name": "Bus"}}))
+        self.assertTrue(parse.is_replacement({"disassembledName": "701", "product": {"class": 5, "name": "Schienenersatzverkehr"}}))
+        for normal in ({"disassembledName": "RE5", "product": {"class": 13, "name": "R-Bahn"}}, {"disassembledName": "Seven", "product": {"class": 5}},
+                       {"disassembledName": "42", "product": {"class": 5, "name": "Bus"}}, {}):
+            self.assertFalse(parse.is_replacement(normal), normal)
+        event = {"location": platform("Bstg 1"), "departureTimePlanned": "2026-10-01T08:00:00Z", "transportation": {**sev, "destination": {"name": "Koblenz"}}}
+        self.assertIs(parse.parse_departure(event)["replacement"], True)
+
+
+class TabOfTest(unittest.TestCase):
+    def test_tab_of_a_service(self):
+        for cls, tab in ((5, "bus"), (7, "bus"), (17, "bus"), (0, "trains"), (16, "trains"), (1, "sbahn"), (3, "tram"), (9, "ferry"),
+                         (99, "other"), (None, "other")):
+            self.assertEqual(parse.tab_of({"product": {"class": cls}}), tab, cls)
+        self.assertEqual(parse.tab_of({}), "other")
+
+
 class GroupingTest(unittest.TestCase):
     def dep(self, mode, platform_name, minutes, area="Hbf"):
         code = None if platform_name == "Unknown platform" else platform_name.replace("Platform ", "")
@@ -925,6 +983,13 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(lines, ["503"])
         from efa.localtime import to_local
         self.assertEqual(result["next_service"], to_local(in_three_days).date().isoformat())
+        # until then: the station next door has departures now, and what kind
+        # (like Waldshut, whose trains are replaced by buses from the bus station)
+        self.assertEqual(result["nearby"], [{"id": self.TIEF, "name": "Stuttgart Hauptbahnhof (tief)", "lat": None, "lon": None,
+                                             "types": [{"id": "sbahn", "name": "S-Bahn"}]}])
+        # a neighbour without departures is not somewhere to send people
+        self.events[self.TIEF] = {}
+        self.assertEqual(self.board(self.HBF)["nearby"], [])
 
     def test_look_ahead_is_only_used_for_empty_boards(self):
         self.later[self.HBF] = (datetime.now(timezone.utc) + timedelta(days=3), [event(5, line="503")])

@@ -49,6 +49,7 @@ Lists the endpoints.
     "search_stops": "/api/v1/stops/search?q={text}",
     "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}&platforms={0|1}",
     "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}",
+    "platform_departures": "/api/v1/stops/{stop_id}/departures?platform={platform_id}",
     "departure_stops": "/api/v1/stops/{stop_id}/departures/{departure_id}/stops"
   },
   "stop_data": {
@@ -226,6 +227,7 @@ type (tab), grouped by mode, then by platform.
 |---|---|---|
 | `stop_id` | required | A stop `id` from the search. |
 | `tab` | optional | A tab `id` from `tabs`. Missing or unknown: the first tab. |
+| `platform` | optional | A platform `id` of this stop (from a board, or from the stops-in-an-area endpoint): only that platform's departures, see "One platform" below. `tab` is ignored then. |
 
 A station shows only its own departures. Stations right next to it (e.g. the
 underground part of a main station, or the bus station in front of it) are
@@ -272,6 +274,7 @@ and one departure)
               "destination": "Crailsheim",
               "via": ["Bad Cannstatt", "Waiblingen"],
               "dticket": true,
+              "replacement": false,
               "time": "2026-10-01T22:38:00Z",
               "planned": "2026-10-01T22:34:00Z",
               "minutes": 63,
@@ -285,7 +288,8 @@ and one departure)
     }
   ],
   "empty": null,
-  "next_service": null
+  "next_service": null,
+  "platform": null
 }
 ```
 
@@ -294,11 +298,12 @@ and one departure)
 | Field | |
 |---|---|
 | `stop` | The station: `id`, `name`, `lat`, `lon`. |
-| `nearby` | Stations linked to this one: `id`, `name`, `lat`, `lon`. When `empty` is `"nearby"`, only those that have departures are listed, each with `types` (`[{id, name}]`). |
+| `nearby` | Stations linked to this one: `id`, `name`, `lat`, `lon`. When `empty` is `"nearby"` or `next_service` is set, only those that have departures now are listed, each with `types` (`[{id, name}]`): that is where a traveller has to go meanwhile (e.g. a railway station whose trains are replaced by buses from the bus station next to it). |
 | `tabs` | Transport types that have departures here: `[{id, name}]`. Empty if the station has none. |
 | `tab` | The `id` of the tab this response shows, or `null`. |
 | `modes` | The departures, see below. In display order. |
-| `empty` | `null` if there are departures. Otherwise why there are none: `"nearby"` (nothing departs here in the next 7 days, but linked stations in `nearby` have service) or `"no_service"` (the timetable has nothing for this station in the next 7 days, nor for the ones next to it). |
+| `empty` | `null` if there are departures. Otherwise why there are none: `"nearby"` (nothing departs here in the next 7 days, but linked stations in `nearby` have service), `"no_service"` (the timetable has nothing for this station in the next 7 days, nor for the ones next to it) or, when one platform was asked for, `"platform"` (nothing departs from it in the next 24 hours). |
+| `platform` | `null`, unless one platform was asked for: then that platform, see "One platform". |
 | `next_service` | Normally `null`. The timetable service only knows the next 24 hours; a stop served on school days only has nothing there on a Saturday. In that case the API looks up to a week ahead, returns the first departures it finds in `modes` (all transport types together, `tabs` empty) and sets `next_service` to their local date, e.g. `"2026-10-05"`. A client should say so, and show the date with these departures. |
 
 Tab ids: `trains`, `sbahn`, `tram`, `bus`, `ferry`, `cablecar`, `other`.
@@ -333,12 +338,39 @@ Tab ids: `trains`, `sbahn`, `tram`, `bus`, `ferry`, `cablecar`, `other`.
 | `destination` | Where the vehicle is signed to. The town is left out if it is the station's own. |
 | `via` | Up to two major stops on the way to `destination`, in travel order: names from the departure's stop list (next endpoint), never from beyond the destination. Empty if the destination is the next stop. |
 | `dticket` | `true` if the Deutschlandticket is valid. `false` means not valid or not known. |
+| `replacement` | `true` for a bus that runs in place of a train (rail replacement service, "SEV"). The timetable service lists some of these among the trains, at the bus station they leave from; a client should say that it is a bus. |
 | `time` | Expected departure: the live time if there is one, else the planned time. Can be days ahead when `next_service` is set; show the date then. A client shows `planned` and `time` for late departures; `delay` is there for convenience. |
 | `planned` | Planned departure. |
 | `minutes` | Minutes from now until `time`, never negative. |
 | `delay` | Minutes late (negative = early), or `null` without live data. |
 | `realtime` | `true` if `time` comes from live data. |
 | `cancelled` | `true` if the trip is cancelled. |
+
+**One platform** (`/api/v1/stops/de:08118:7402/departures?platform=de:08118:7402:5:15`,
+bay 15 of Ludwigsburg's bus station)
+
+The response has the same shape, with the departures of that platform
+alone: up to the next 100 from it, however busy the rest of the station
+is. `tabs` is empty, `tab` names the kind of transport that stops there
+(to get back to the whole station on the right tab), and `platform` says
+which platform this is:
+
+```json
+"platform": {
+  "id": "de:08118:7402:5:15",
+  "code": "15",
+  "name": "Platform 15",
+  "lat": 48.891156,
+  "lon": 9.186657,
+  "towards": ["Martin-Luther-Str."]
+}
+```
+
+`code`, `name`, `lat`, `lon` and `towards` mean the same as for a platform
+in `modes`. If nothing departs from the platform in the next 24 hours,
+`modes` is empty, `empty` is `"platform"`, and `code` and the position come
+from the stop database (`null` if it doesn't know the platform). A platform
+id that is not one of this stop's gives `404 unknown_platform`.
 
 **A station without departures** (`/api/v1/stops/de:08337:6575/departures`,
 a station whose trains are currently replaced by buses from the bus station):
@@ -470,6 +502,7 @@ Errors use the matching HTTP status and always have this shape:
 |---|---|---|
 | 400 | `invalid_parameter` | A parameter is missing or malformed, e.g. `bbox`. The message says which. |
 | 404 | `unknown_stop` | The stop id doesn't exist or is outside Baden-Württemberg. |
+| 404 | `unknown_platform` | The platform id given to the departures endpoint is not one of that stop's. |
 | 404 | `unknown_departure` | The departure id isn't one of this station's, or the departure is no longer in the timetable (it left a while ago). Load the board again. |
 | 404 | `not_found` | No such API address. |
 | 405 | `method_not_allowed` | Anything other than `GET`. |

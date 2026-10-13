@@ -66,6 +66,7 @@ tr:last-child td { border-bottom: none; }
 .line-badge { display: inline-block; min-width: 30px; padding: 3px 6px; background: #005aa9; color: white; border-radius: 4px; font-weight: bold; text-align: center; font-size: 0.9rem; white-space: nowrap; }
 .direction { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .dticket { padding: 1px 7px; border: 1px solid #2e8b47; border-radius: 10px; color: #2e8b47; font-size: 0.72rem; font-weight: bold; white-space: nowrap; }
+.replacement { padding: 1px 7px; border: 1px solid #a05a00; border-radius: 10px; color: #a05a00; font-size: 0.72rem; font-weight: bold; white-space: nowrap; }
 .via { color: #777; font-size: 0.85rem; margin-top: 2px; }
 .time { white-space: nowrap; text-align: right; }
 .time s { color: #999; }

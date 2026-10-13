@@ -31,6 +31,7 @@ MODE_ORDER = [
 # why a board has no departures
 EMPTY_NEARBY = "nearby"          # nothing here, but linked stations have service
 EMPTY_NO_SERVICE = "no_service"  # the timetable has nothing for this station
+EMPTY_PLATFORM = "platform"      # the one platform asked for has nothing in the next 24 hours
 
 # EFA only answers with departures of the next 24 hours (a departure 23 hours
 # away is found, one 24 hours away is not). A stop served on school days only
@@ -55,6 +56,10 @@ class UnknownStop(Exception):
 
 class UnknownDeparture(Exception):
     """This departure can't be found (any more)."""
+
+
+class UnknownPlatform(Exception):
+    """The platform asked for is not one of this station's."""
 
 
 def mode_sort_key(name: str):
@@ -149,7 +154,13 @@ def dedupe(departures: list) -> list:
         key = (dep["mode"], dep["platform"], dep["platform_area"], dep["line"], dep["destination"], dep["planned"])
         if key not in kept or (dep["realtime"] and not kept[key]["realtime"]):
             kept[key] = dep
-    return list(kept.values())
+    # Near the Swiss border the same train also comes from a second timetable,
+    # without a platform (Waldshut: "S27, platform 5" and "S27" again). The
+    # copy that knows its platform is the one to show.
+    def trip(dep):
+        return dep["mode"], dep["line"], dep["destination"], dep["planned"]
+    with_platform = {trip(dep) for dep in kept.values() if dep.get("platform_code")}
+    return [dep for dep in kept.values() if dep.get("platform_code") or trip(dep) not in with_platform]
 
 
 # two platform positions this close are one place to stand
@@ -365,20 +376,70 @@ def public_stop(stop: dict) -> dict:
     return {"id": stop["id"], "name": stop["name"], "lat": stop["lat"], "lon": stop["lon"]}
 
 
-def board(stop_id: str, tab_id: str = "") -> dict:
+def known_platform(platform_id: str) -> dict:
+    """What the stop database says about a platform ({} if nothing): for a
+    platform that has no departures to take it from."""
+    try:
+        return store.platform(platform_id) or {}
+    except (store.StopsNotImported, sqlite3.Error):
+        return {}
+
+
+def platform_board(station: dict, nearby: list, platform_id: str) -> dict:
+    """The board of ONE platform of a station: the same shape as `board`,
+    with `platform` saying which. EFA answers for a platform id with that
+    platform's departures alone, so a quiet bay of a big bus station gets its
+    own next departures, not its share of the station's next hundred."""
+    # a platform's id is its station's id plus the part of the station and a
+    # number; some simple stops are their own and only platform
+    if platform_id != station["id"] and not platform_id.startswith(station["id"] + ":"):
+        raise UnknownPlatform(platform_id)
+    events = [event for event in client.get_departures(platform_id).get("stopEvents") or []
+              if isinstance(event, dict) and (event.get("location") or {}).get("id") == platform_id]
+    tab = next((parse.tab_of(event.get("transportation") or {}) for event in events if not parse.is_excluded(event)), None)
+    departures = dedupe(parse_events(events))
+    heading = towards(departures)
+    modes = group_departures(departures)
+    shown = modes[0]["platforms"][0] if modes else known_platform(platform_id)
+    code = shown.get("code")
+    return {
+        "stop": public_stop(station),
+        "nearby": [public_stop(n) for n in nearby],
+        "tabs": [],
+        "tab": tab if modes else None,
+        "modes": modes,
+        "empty": None if modes else EMPTY_PLATFORM,
+        "next_service": None,
+        "platform": {
+            "id": platform_id,
+            "code": code,
+            "name": f"Platform {code}" if code else parse.UNKNOWN_PLATFORM,
+            "lat": shown.get("lat"),
+            "lon": shown.get("lon"),
+            "towards": heading if modes else shown.get("towards", []),
+        },
+    }
+
+
+def board(stop_id: str, tab_id: str = "", platform_id: str = "") -> dict:
     """The departure board for one station and tab:
     {stop: {id, name, lat, lon}, nearby: [{id, name, lat, lon}],
      tabs: [{id, name}], tab, modes: [...],
-     empty: None | "nearby" | "no_service", next_service: None | "YYYY-MM-DD"}.
+     empty: None | "nearby" | "no_service" | "platform",
+     next_service: None | "YYYY-MM-DD", platform: None | {...}}.
 
     `next_service` is set when nothing departs in the next 24 hours and the
-    departures shown are the next ones after that; it is their (local) date."""
+    departures shown are the next ones after that; it is their (local) date.
+    With `platform_id` the board holds that platform's departures only, see
+    `platform_board`."""
     station = parse.parse_station(client.get_station(stop_id))
     # EFA resolves an id it doesn't know to whatever stop matches loosely,
     # anywhere in Europe; only accept stations in Baden-Württemberg
     if not station or not parse.in_baden_wuerttemberg(station["id"] or ""):
         raise UnknownStop(stop_id)
     nearby = [n for n in station["nearby"] if parse.in_baden_wuerttemberg(n["id"])]
+    if platform_id:
+        return platform_board(station, nearby, platform_id)
 
     tabs, tab, departures = load_tab(station, tab_id)
     departures = dedupe(departures)
@@ -396,6 +457,10 @@ def board(stop_id: str, tab_id: str = "") -> dict:
         # service (e.g. rail replacement buses leaving from the bus station)
         nearby = nearby_with_service(nearby)
         empty = EMPTY_NEARBY if nearby else EMPTY_NO_SERVICE
+    elif next_service:
+        # nothing today, but later: until then the station next door may be
+        # where everything leaves from, and a visitor should be told
+        nearby = nearby_with_service(nearby)
     else:
         nearby = [public_stop(n) for n in nearby]
 
@@ -407,4 +472,5 @@ def board(stop_id: str, tab_id: str = "") -> dict:
         "modes": group_departures(departures),
         "empty": empty,
         "next_service": next_service,
+        "platform": None,
     }

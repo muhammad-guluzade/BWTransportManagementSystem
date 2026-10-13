@@ -83,6 +83,12 @@ def to_platform(row: sqlite3.Row) -> dict:
     }
 
 
+def platform(platform_id: str) -> dict | None:
+    """One platform by its id, or None."""
+    rows = query("SELECT * FROM platforms WHERE id = ?", (platform_id,))
+    return to_platform(rows[0]) if rows else None
+
+
 def platforms_of(station_ids: list) -> dict:
     """{station id: its served platforms, the busiest first}."""
     found = {station_id: [] for station_id in station_ids}

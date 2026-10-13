@@ -289,8 +289,9 @@ function renderStation(data) {
   stationBox.innerHTML = '';
   stationBox.appendChild(el('h2', 'station-name', data.stop.name));
 
-  // when the board is empty the nearby stations are shown in its place instead
-  if (data.nearby.length && !data.empty) {
+  // when the board is empty, or only has departures days ahead, the nearby
+  // stations are part of the notice on the board instead
+  if (data.nearby.length && !data.empty && !data.next_service) {
     const nearby = el('div', 'nearby', 'Also nearby: ');
     data.nearby.forEach((stop, i) => {
       if (i > 0) nearby.appendChild(document.createTextNode(' · '));
@@ -409,6 +410,8 @@ function renderDeparture(dep, mode, platform) {
   const direction = el('div', 'direction');
   direction.appendChild(el('span', 'destination', dep.destination));
   if (dep.dticket) direction.appendChild(el('span', 'dticket', 'D-Ticket'));
+  // a bus running in place of a train, even where it is listed among the trains
+  if (dep.replacement) direction.appendChild(el('span', 'replacement', 'Replacement bus'));
   directionCell.appendChild(direction);
   if (dep.via.length) {
     directionCell.appendChild(el('div', 'via', 'via ' + dep.via.join(' · ')));
@@ -472,21 +475,26 @@ function renderPlatform(mode, platform) {
   return block;
 }
 
+// the stations next door that have departures, with what leaves there
+function nearbyList(data) {
+  const list = el('ul');
+  data.nearby.forEach(stop => {
+    const item = el('li');
+    item.appendChild(stopLink(stop));
+    if (stop.types && stop.types.length) {
+      item.appendChild(document.createTextNode(' (' + stop.types.map(t => t.name).join(', ') + ')'));
+    }
+    list.appendChild(item);
+  });
+  return list;
+}
+
 // an empty board says why it is empty
 function renderEmpty(data) {
   const notice = el('div', 'notice');
   if (data.empty === 'nearby') {
     notice.appendChild(el('p', '', 'Nothing departs from this station itself, but there are departures right next to it:'));
-    const list = el('ul');
-    data.nearby.forEach(stop => {
-      const item = el('li');
-      item.appendChild(stopLink(stop));
-      if (stop.types.length) {
-        item.appendChild(document.createTextNode(' (' + stop.types.map(t => t.name).join(', ') + ')'));
-      }
-      list.appendChild(item);
-    });
-    notice.appendChild(list);
+    notice.appendChild(nearbyList(data));
   } else {
     notice.appendChild(el('p', '', 'The timetable has no departures for this station in the next 7 days. '
       + 'It may be served only in certain periods (school terms, a season), or the line may be closed.'));
@@ -505,7 +513,14 @@ function renderBoard(data) {
     // nothing in the next 24 hours: these are the next departures after that
     const notice = el('div', 'notice');
     const date = longDateFormat.format(new Date(data.next_service + 'T12:00:00Z'));
-    notice.appendChild(el('p', '', `Nothing departs here in the next 24 hours. The next departures are on ${date}:`));
+    if (data.nearby.length) {
+      // e.g. a railway station whose trains are replaced by buses from the bus station
+      notice.appendChild(el('p', '', 'Nothing departs here in the next 24 hours. Right now there are departures next to this station:'));
+      notice.appendChild(nearbyList(data));
+      notice.appendChild(el('p', '', `Here, the next departures are on ${date}:`));
+    } else {
+      notice.appendChild(el('p', '', `Nothing departs here in the next 24 hours. The next departures are on ${date}:`));
+    }
     board.appendChild(notice);
   }
 

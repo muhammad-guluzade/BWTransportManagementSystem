@@ -97,7 +97,7 @@ class IndexTest(ApiTestCase):
     def test_index_lists_the_endpoints(self):
         body = self.http.get("/api/v1/").get_json()
         self.assertEqual(body["version"], 1)
-        self.assertEqual(set(body["endpoints"]), {"search_stops", "stops_in_area", "departures", "departure_stops"})
+        self.assertEqual(set(body["endpoints"]), {"search_stops", "stops_in_area", "departures", "platform_departures", "departure_stops"})
 
 
 class SearchTest(ApiTestCase):
@@ -130,8 +130,9 @@ class DeparturesTest(ApiTestCase):
         res = self.get()
         self.assertEqual(res.status_code, 200)
         body = res.get_json()
-        self.assertEqual(list(body), ["stop", "nearby", "tabs", "tab", "modes", "empty", "next_service"])
+        self.assertEqual(list(body), ["stop", "nearby", "tabs", "tab", "modes", "empty", "next_service", "platform"])
         self.assertIsNone(body["next_service"])
+        self.assertIsNone(body["platform"])   # the whole stop, not one platform of it
         self.assertEqual(body["stop"], {"id": STOP, "name": "Stuttgart, Hauptbahnhof (oben)", "lat": 48.784729, "lon": 9.183172})
         self.assertEqual(body["nearby"], [{"id": NEIGHBOUR, "name": "Stuttgart Hauptbahnhof (tief)", "lat": 48.783385, "lon": 9.180225}])
         self.assertEqual(body["tabs"], [{"id": "trains", "name": "Trains"}])
@@ -151,8 +152,8 @@ class DeparturesTest(ApiTestCase):
         self.assertEqual(platform["towards"], ["Plochingen"])
 
         departure = platform["departures"][0]
-        self.assertEqual(list(departure), ["id", "line", "destination", "via", "dticket", "time", "planned", "minutes",
-                                           "delay", "realtime", "cancelled"])
+        self.assertEqual(list(departure), ["id", "line", "destination", "via", "dticket", "replacement", "time", "planned",
+                                           "minutes", "delay", "realtime", "cancelled"])
         minutes = departure.pop("minutes")  # depends on the clock
         self.assertIsInstance(minutes, int)
         # the id goes into an address, so it must need no escaping
@@ -162,6 +163,7 @@ class DeparturesTest(ApiTestCase):
             "destination": "Ulm Hauptbahnhof",
             "via": ["Plochingen", "Göppingen"],
             "dticket": True,
+            "replacement": False,
             "time": "2026-10-01T08:04:00Z",
             "planned": "2026-10-01T08:00:00Z",
             "delay": 4,
@@ -243,6 +245,118 @@ class DeparturesTest(ApiTestCase):
         client.get_departures = lambda stop_id, classes=(), **kw: {}
         body = self.get().get_json()
         self.assertEqual((body["empty"], body["nearby"]), ("no_service", []))
+
+
+class PlatformBoardTest(ApiTestCase):
+    """The departures of one platform: /stops/{stop}/departures?platform={id}"""
+
+    BAY = STOP + ":5:15"
+
+    def bus(self, minute, bay=None, next_name="Schlossplatz"):
+        location = {"id": bay or self.BAY, "name": "Stuttgart Hauptbahnhof (oben)", "type": "platform", "coord": [48.7841, 9.1820],
+                    "properties": {"platform": "15", "platformName": "Bstg 15"}, "parent": EVENT["location"]["parent"]}
+        return {"location": location, "departureTimePlanned": f"2026-10-01T08:{minute:02d}:00Z",
+                "transportation": {"id": "bus:42", "disassembledName": "42", "product": {"class": 5, "name": "Bus"},
+                                   "destination": {"name": "Endstation"}, "properties": {"tripCode": minute}},
+                "onwardLocations": [{**platform_of("de:08111:1", next_name, "1"), "productClasses": [5]},
+                                    {**platform_of("de:08111:2", "Endstation", "1"), "productClasses": [5]}]}
+
+    def setUp(self):
+        super().setUp()
+        departures._trips.clear()
+        self.asked = []
+        self.answer = [self.bus(5), self.bus(25)]
+
+        def get_departures(stop_id, classes=(), **kw):
+            self.asked.append(stop_id)
+            return {"stopEvents": self.answer} if stop_id == self.BAY else {"stopEvents": self.events}
+        client.get_departures = get_departures
+        self.known = departures.known_platform
+        departures.known_platform = lambda platform_id: {}
+
+    def tearDown(self):
+        departures.known_platform = self.known
+        departures._trips.clear()
+        super().tearDown()
+
+    def get(self, platform=None, stop=STOP):
+        return self.http.get(f"/api/v1/stops/{stop}/departures?platform={platform or self.BAY}")
+
+    def test_shape(self):
+        res = self.get()
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertEqual(list(body), ["stop", "nearby", "tabs", "tab", "modes", "empty", "next_service", "platform"])
+        self.assertEqual(body["stop"]["id"], STOP)
+        # one platform has no tabs to choose from; `tab` says what kind of transport it is
+        self.assertEqual((body["tabs"], body["tab"], body["empty"], body["next_service"]), ([], "bus", None, None))
+        self.assertEqual(body["platform"], {"id": self.BAY, "code": "15", "name": "Platform 15", "lat": 48.7841, "lon": 9.182,
+                                            "towards": ["Schlossplatz"]})
+        (mode,) = body["modes"]
+        (platform,) = mode["platforms"]
+        self.assertEqual((mode["id"], mode["flat"], platform["id"], len(platform["departures"])), ("bus", True, self.BAY, 2))
+
+    def test_the_timetable_service_is_asked_for_the_platform(self):
+        self.get()
+        self.assertEqual(self.asked, [self.BAY])   # not for the whole stop and its tabs
+
+    def test_only_that_platform_s_departures(self):
+        # should the service answer with more than was asked for
+        self.answer.append(self.bus(9, bay=STOP + ":5:16"))
+        self.answer.append(EVENT)
+        body = self.get().get_json()
+        rows = [dep for mode in body["modes"] for platform in mode["platforms"] for dep in platform["departures"]]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({platform["id"] for mode in body["modes"] for platform in mode["platforms"]}, {self.BAY})
+
+    def test_its_departures_open_their_stops(self):
+        dep = self.get().get_json()["modes"][0]["platforms"][0]["departures"][0]
+        res = self.http.get(f"/api/v1/stops/{STOP}/departures/{dep['id']}/stops")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual([stop["name"] for stop in res.get_json()["onward"]], ["Schlossplatz", "Endstation"])
+
+    def test_a_quiet_platform(self):
+        self.answer = []
+        body = self.get().get_json()
+        self.assertEqual((body["modes"], body["empty"], body["tab"]), ([], "platform", None))
+        self.assertEqual(body["platform"], {"id": self.BAY, "code": None, "name": "Unknown platform", "lat": None, "lon": None,
+                                            "towards": []})
+        # with a stop database, that says where the platform is
+        departures.known_platform = lambda platform_id: {"id": platform_id, "code": "15", "lat": 48.7841, "lon": 9.182,
+                                                         "kinds": ["bus"], "towards": ["Stuttgart Schlossplatz"]}
+        self.assertEqual(self.get().get_json()["platform"], {"id": self.BAY, "code": "15", "name": "Platform 15", "lat": 48.7841,
+                                                             "lon": 9.182, "towards": ["Stuttgart Schlossplatz"]})
+
+    def test_a_platform_of_another_stop(self):
+        for platform in (NEIGHBOUR + ":1:1", NEIGHBOUR, "nonsense", STOP + "5:15"):
+            res = self.get(platform)
+            self.assertEqual((res.status_code, res.get_json()["error"]["code"]), (404, "unknown_platform"), platform)
+        self.assertEqual(self.asked, [])   # refused without bothering the timetable service
+        # and an unknown stop is still an unknown stop
+        res = self.get(stop="nonsense")
+        self.assertEqual(res.get_json()["error"]["code"], "unknown_stop")
+
+    def test_a_stop_that_is_its_own_platform(self):
+        # some simple stops have no platform level: the platform's id is the stop's
+        def get_departures(stop_id, classes=(), **kw):
+            return {"stopEvents": [self.bus(5, bay=STOP), self.bus(9)]}
+        client.get_departures = get_departures
+        body = self.get(STOP).get_json()
+        self.assertEqual(body["platform"]["id"], STOP)
+        self.assertEqual([p["id"] for mode in body["modes"] for p in mode["platforms"]], [STOP])
+
+    def test_without_the_parameter_the_whole_stop(self):
+        for query in ("", "?platform=", "?platform=%20"):
+            body = self.http.get(f"/api/v1/stops/{STOP}/departures{query}").get_json()
+            self.assertIsNone(body["platform"], query)
+            self.assertEqual(body["tab"], "trains")
+
+    def test_timetable_service_down(self):
+        def down(*args, **kwargs):
+            raise client.EfaError("timeout")
+        client.get_departures = down
+        res = self.get()
+        self.assertEqual((res.status_code, res.get_json()["error"]["code"]), (502, "timetable_unavailable"))
 
 
 class DepartureStopsTest(ApiTestCase):

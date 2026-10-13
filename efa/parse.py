@@ -143,6 +143,12 @@ def tabs_for(classes) -> list:
     return tabs
 
 
+def tab_of(transportation: dict) -> str:
+    """The id of the tab a service is listed under: 'bus', 'trains', ..."""
+    cls = (transportation.get("product") or {}).get("class")
+    return next((tab_id for tab_id, _, classes in TABS if cls in classes), OTHER_TAB[0])
+
+
 def tab_names(classes) -> str:
     """'Trains, Bus' -- what stops at a station, for telling apart two
     search results with the same name."""
@@ -209,11 +215,27 @@ def line_name(transportation: dict) -> str:
     """Rider-facing line label, e.g. 'U7', 'RE5', 'ICE 1291'."""
     if transportation.get("disassembledName"):
         return transportation["disassembledName"]
-    # long-distance trains have no line name, only a type and train number
     props = transportation.get("properties") or {}
+    number = str(transportation.get("number") or "").strip()
+    train_number = str(props.get("trainNumber") or "").strip()
+    # Services taken over from the Swiss timetable come without the usual line
+    # label but with the line in `number` ("S14", "908"), next to a train
+    # number that riders never see ("S 23811")
+    if number and train_number and train_number not in number:
+        return number
+    # long-distance trains have no line name, only a type and train number
     if props.get("trainType"):
-        return f"{props['trainType']} {props.get('trainNumber', '')}".strip()
-    return transportation.get("number") or transportation.get("name") or "?"
+        return f"{props['trainType']} {train_number}".strip()
+    return number or transportation.get("name") or "?"
+
+
+def is_replacement(transportation: dict) -> bool:
+    """A bus running in place of a train ("Schienenersatzverkehr", SEV). EFA
+    lists some of them as trains, at the bus station they leave from."""
+    product = (transportation.get("product") or {}).get("name") or ""
+    props = transportation.get("properties") or {}
+    return ("ersatz" in product.lower() or props.get("trainType") == "BSV"
+            or bool(re.match(r"SEV\b", line_name(transportation), re.IGNORECASE)))
 
 
 # --- departures: places ----------------------------------------------------
@@ -561,6 +583,7 @@ def parse_departure(event: dict, now: datetime | None = None, importance: dict |
         # the last stop; don't list it a second time as a via stop
         "via": [stop for stop in via_stops(event, importance) if stop != destination],
         "dticket": dticket_valid(transportation) is True,
+        "replacement": is_replacement(transportation),
         "time": iso(actual),
         "planned": iso(planned),
         "minutes": max(0, round((actual - now).total_seconds() / 60)) if actual else None,
