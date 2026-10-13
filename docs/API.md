@@ -46,7 +46,7 @@ Lists the endpoints.
   "name": "BW Departures API",
   "version": 1,
   "endpoints": {
-    "search_stops": "/api/v1/stops/search?q={text}",
+    "search_stops": "/api/v1/stops/search?q={text}&near={lat},{lon}&radius={km}&limit={n}",
     "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}&platforms={0|1}",
     "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}",
     "platform_departures": "/api/v1/stops/{stop_id}/departures?platform={platform_id}",
@@ -73,13 +73,38 @@ be imported. `stop_data` is `null` until the database has been built. A
 client that shows stops from this API must show `attribution` with a link
 to `source`.
 
-### `GET /api/v1/stops/search?q={text}`
+### `GET /api/v1/stops/search?q={text}&near={lat},{lon}&radius={km}&limit={n}`
 
-Finds stops by name, best match first (at most 15).
+Finds stops by name, best match first. Made for a search box that asks
+again with every key typed.
 
 | Parameter | | |
 |---|---|---|
-| `q` | required | Search text. Fewer than 2 characters gives an empty list. |
+| `q` | required | What was typed so far. Fewer than 2 characters gives an empty list. A space at the end means the last word is finished. |
+| `near` | optional | Where the user's map is (its centre), as `lat,lon`. Stops there come first. |
+| `radius` | optional | How far that map shows, in kilometres from its centre. Default 10. With a map of the whole state (a large radius) no place is preferred. |
+| `limit` | optional | How many stops to return at most. Default 10, maximum 25. |
+
+What the search copes with:
+
+- **Spelling.** Capitals, umlauts and ß don't matter (`Muhlhausen`,
+  `Muehlhausen` and `Mühlhausen` are the same), nor do common short forms
+  (`Hbf`, `Bf`, `Str.`). A few wrong, missing or swapped letters are
+  forgiven, more in a long word than in a short one (`Stutgart Hauptbanhof`).
+- **Typing.** The beginning of a word is enough (`Stutt`), and the words
+  can come in any order (`Hauptbahnhof Freiburg`).
+- **Towns.** A stop is found with its city even where its name lacks it
+  (`Stuttgart Pragfriedhof`, `Karlsruhe Turmberg`), and `Bahnhof` finds a
+  town's railway station whatever it is called (`Bruchsal Bahnhof`).
+- **Which stop first.** The stops that fit the words best; among those,
+  the important ones (a town's main station before a bus stop), and with
+  `near` the close ones. Words that clearly mean another place win over
+  the map: `Ulm` finds Ulm's main station also on a map of Stuttgart.
+
+Results come from the stop database and from the timetable service's own
+search, ranked together. Either works without the other: without the stop
+database the timetable service is searched alone, and when the timetable
+service doesn't answer, the stop database is.
 
 Example: `/api/v1/stops/search?q=Stuttgart Hauptbahnhof`
 
@@ -112,9 +137,9 @@ Example: `/api/v1/stops/search?q=Stuttgart Hauptbahnhof`
 | Field | |
 |---|---|
 | `id` | Stop id; use it in the departures endpoint. |
-| `name` | Full name including the town. When two results share a name, what stops there is appended (`"Kehl, Bahnhof · Bus"`). |
+| `name` | The stop's name, with the town wherever it is known (`"Stuttgart, Pragfriedhof"`). When two results share a name, what stops there is appended (`"Kehl, Bahnhof · Bus"`), and the district if that is still not enough (`"Rathaus · Bus (Kreis Esslingen)"`). |
 | `lat`, `lon` | Position of the stop. |
-| `types` | Transport types the timetable service lists for the stop. A hint only: it can include a type that has no departures. The departures endpoint returns the verified list as `tabs`. |
+| `types` | Transport types listed for the stop (by the timetable service, or by the stop database for a stop only it found). A hint only: it can include a type that has no departures. The departures endpoint returns the verified list as `tabs`. |
 
 ### `GET /api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}&platforms={0|1}`
 

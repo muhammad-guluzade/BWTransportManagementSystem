@@ -83,6 +83,14 @@ def to_platform(row: sqlite3.Row) -> dict:
     }
 
 
+def stations_for_search() -> list:
+    """Every station with what a search needs: name, place, importance and
+    what stops there."""
+    require_current()
+    return [dict(row) for row in query(
+        "SELECT id, name, lat, lon, importance, rail_lines, sbahn_lines, ubahn_lines, tram_lines, bus_lines, other_lines FROM stations")]
+
+
 def platform(platform_id: str) -> dict | None:
     """One platform by its id, or None."""
     rows = query("SELECT * FROM platforms WHERE id = ?", (platform_id,))

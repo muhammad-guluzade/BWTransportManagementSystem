@@ -61,7 +61,7 @@ def index():
         "name": "BW Departures API",
         "version": 1,
         "endpoints": {
-            "search_stops": "/api/v1/stops/search?q={text}",
+            "search_stops": "/api/v1/stops/search?q={text}&near={lat},{lon}&radius={km}&limit={n}",
             "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}&platforms={0|1}",
             "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}",
             "platform_departures": "/api/v1/stops/{stop_id}/departures?platform={platform_id}",
@@ -80,7 +80,8 @@ def stops_in_area():
 
 @bp.route("/stops/search")
 def search_stops():
-    return jsonify({"stops": stops.search(request.args.get("q", ""))})
+    return jsonify({"stops": stops.search(request.args.get("q", ""), request.args.get("near", ""),
+                                          request.args.get("radius", ""), request.args.get("limit", ""))})
 
 
 @bp.route("/stops/<stop_id>/departures")

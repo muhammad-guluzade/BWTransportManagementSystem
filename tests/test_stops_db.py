@@ -805,6 +805,53 @@ class PlatformTest(StopsDbTestCase):
         self.assertTrue(store.importance())
 
 
+class SearchIndexTest(StopsDbTestCase):
+    """The search index is made from the stop database and follows it."""
+
+    def test_index_of_the_database(self):
+        from services import stop_index
+        index = stop_index.current()
+        self.assertEqual(len(index.stops), len(SERVED))
+        self.assertIs(stop_index.current(), index)                      # built once, not for every search
+        self.assertEqual([r["id"] for r in index.search("Pragsatel")], ["de:08111:6113"])
+        self.assertEqual([r["id"] for r in index.search("Stuttgart Hbf")], ["de:08111:6115"])
+
+    def test_a_new_import_gives_a_new_index(self):
+        from services import stop_index
+        before = stop_index.current()
+        db = sqlite3.connect(store.DB_PATH)
+        db.execute("UPDATE stations SET name = 'Neuer Name' WHERE id = 'de:08111:6113'")
+        db.commit()
+        db.close()
+        stat = store.DB_PATH.stat()
+        os.utime(store.DB_PATH, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+        after = stop_index.current()
+        self.assertIsNot(after, before)
+        self.assertEqual([r["id"] for r in after.search("Neuer Name")], ["de:08111:6113"])
+        self.assertEqual(after.search("Pragsattel"), [])
+
+    def test_search_without_or_with_an_old_database(self):
+        from services import stops
+        original = stops.efa_matches
+        stops.efa_matches = lambda query: [{"id": "de:08111:6113", "name": "Stuttgart, Pragsattel", "lat": 48.8, "lon": 9.18,
+                                            "quality": 900, "classes": [3]}]
+        try:
+            self.assertEqual([s["name"] for s in stops.search("Pragsattel")], ["Stuttgart, Pragsattel"])   # both, one row
+            db = sqlite3.connect(store.DB_PATH)
+            db.execute("UPDATE meta SET value = '2' WHERE key = 'schema'")
+            db.commit()
+            db.close()
+            stat = store.DB_PATH.stat()
+            os.utime(store.DB_PATH, ns=(stat.st_atime_ns, stat.st_mtime_ns + 4_000_000_000))
+            self.assertIsNone(stops.own_matches("Pragsattel", None, 10.0, 5))                              # refused: older layout
+            self.assertEqual([s["name"] for s in stops.search("Pragsattel")], ["Stuttgart, Pragsattel"])   # the timetable service alone
+            store.DB_PATH = self.folder / "nowhere.sqlite"
+            self.assertIsNone(stops.own_matches("Pragsattel", None, 10.0, 5))
+            self.assertEqual([s["name"] for s in stops.search("Pragsattel")], ["Stuttgart, Pragsattel"])
+        finally:
+            stops.efa_matches = original
+
+
 class StoreTest(StopsDbTestCase):
     def test_info(self):
         info = store.info(today=date(2026, 10, 2))

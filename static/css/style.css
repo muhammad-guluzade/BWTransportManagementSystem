@@ -24,8 +24,13 @@ main { flex: 1; display: flex; min-height: 0; }
 #search-box { position: relative; flex: 1; max-width: 620px; }
 input[type=text] { width: 100%; padding: 10px; font-size: 1rem; box-sizing: border-box; border: 1px solid #aaa; border-radius: 4px; }
 #results { position: absolute; background: white; border: 1px solid #ccc; width: 100%; z-index: 2000; max-height: 220px; overflow-y: auto; box-sizing: border-box; }
-#results div { padding: 8px 10px; cursor: pointer; }
-#results div:hover { background: #eef; }
+#results { max-height: 420px; }
+#results:empty { border: none; }
+#results div { padding: 8px 10px; }
+#results .result { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; cursor: pointer; }
+#results .result:hover { background: #eef; }
+#results .result-types { flex-shrink: 0; color: #888; font-size: 0.8rem; }
+#results .no-result { color: #777; }
 #status { color: #777; margin-top: 12px; font-size: 0.9rem; }
 
 /* station header: name, nearby stations, transport-type tabs */

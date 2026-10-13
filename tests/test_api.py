@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 from app import app
 from efa import client, parse
-from services import departures
+from services import departures, stops
 
 STOP = "de:08111:6115"
 NEIGHBOUR = "de:08111:6118"
@@ -60,14 +60,19 @@ EVENT = {
 
 def setUpModule():
     # these tests must give the same result with or without a stop database on
-    # the machine; the via stops' use of it is tested with made-up numbers
-    global _real_importance
+    # the machine; the via stops' and the search's use of it are tested with
+    # made-up data (the search in tests/test_search.py)
+    global _real_importance, _real_own_matches, _real_known_importance
     _real_importance = departures.stop_importance
     departures.stop_importance = lambda: {}
+    _real_own_matches, _real_known_importance = stops.own_matches, stops.known_importance
+    stops.own_matches = lambda query, place, radius_km, limit: None
+    stops.known_importance = lambda stop_id: None
 
 
 def tearDownModule():
     departures.stop_importance = _real_importance
+    stops.own_matches, stops.known_importance = _real_own_matches, _real_known_importance
 
 
 SEARCH = {"stopFinder": {"points": [

@@ -10,9 +10,13 @@ This file only wires things together:
   templates/     -- the web pages, which use the JSON API like any client
 """
 
+import threading
+
 from flask import Flask, jsonify, render_template, request
 
 from api import v1
+from gtfs import store
+from services import stop_index
 
 app = Flask(__name__)
 app.json.sort_keys = False  # keep fields in the order the API documents them
@@ -29,8 +33,18 @@ def not_found(exc):
     return exc
 
 
+def prepare_search():
+    """Build the search index while the page loads, so that the first search
+    doesn't have to wait for it (it takes a few seconds)."""
+    try:
+        stop_index.current()
+    except (store.StopsNotImported, OSError):
+        pass  # no stop database: the search asks the timetable service only
+
+
 @app.route("/")
 def index():
+    threading.Thread(target=prepare_search, daemon=True).start()
     return render_template("index.html")
 
 

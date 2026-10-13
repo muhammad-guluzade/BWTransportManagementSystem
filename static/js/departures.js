@@ -53,17 +53,21 @@ const longDateFormat = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 
 // a clock time alone is ambiguous from this many minutes ahead on
 const SHOW_DAY_FROM_MINUTES = 12 * 60;
 
+let searchCounter = 0;         // to ignore search answers that arrive out of order
+
 input.addEventListener('input', () => {
   clearTimeout(debounceTimer);
-  const q = input.value.trim();
-  if (q.length < 2) { resultsBox.innerHTML = ''; return; }
-  debounceTimer = setTimeout(() => searchStops(q), 300);
+  // a space at the end says the last word is finished, so it is kept
+  const q = input.value.replace(/^\s+/, '');
+  if (q.trim().length < 2) { searchCounter++; showResults([]); return; }
+  debounceTimer = setTimeout(() => searchStops(q), 200);
 });
+
 
 // close the dropdown if you click elsewhere
 document.addEventListener('click', (e) => {
   if (!document.getElementById('search-box').contains(e.target)) {
-    resultsBox.innerHTML = '';
+    showResults([]);
   }
 });
 
@@ -84,27 +88,56 @@ async function errorMessage(res, fallback) {
   }
 }
 
+// where the map is and how far it shows: stops there come first in the
+// search. '' if the map could not be loaded.
+function mapPlace() {
+  const map = window.stopMap && window.stopMap.map;
+  if (!map) return '';
+  const centre = map.getCenter();
+  const radius = map.distance(centre, map.getBounds().getNorthEast()) / 1000;
+  return `&near=${centre.lat.toFixed(5)},${centre.lng.toFixed(5)}&radius=${radius.toFixed(1)}`;
+}
+
+// the list under the search box; `nothingFor` is the text nothing was found for
+function showResults(stops, nothingFor = '') {
+  resultsBox.innerHTML = '';
+  stops.forEach(stop => {
+    const row = el('div', 'result');
+    row.appendChild(el('span', 'result-name', stop.name));
+    // what stops there tells a railway station from the bus stop in front of it
+    if (stop.types.length) row.appendChild(el('span', 'result-types', stop.types.map(t => t.name).join(', ')));
+    row.onclick = () => selectStop(stop.id, stop.name, 'search');
+    resultsBox.appendChild(row);
+  });
+  if (!stops.length && nothingFor) resultsBox.appendChild(el('div', 'no-result', `No stop found for "${nothingFor}".`));
+}
+
 async function searchStops(q) {
-  const res = await fetch(`${API}/stops/search?q=${encodeURIComponent(q)}`);
+  const request = ++searchCounter;
+  let res;
+  try {
+    res = await fetch(`${API}/stops/search?q=${encodeURIComponent(q)}${mapPlace()}`);
+  } catch {
+    if (request === searchCounter) status.textContent = 'Could not search stops.';
+    return;
+  }
+  if (request !== searchCounter) return;  // an answer to what was typed before
   if (!res.ok) {
-    resultsBox.innerHTML = '';
+    showResults([]);
     status.textContent = await errorMessage(res, 'Could not search stops.');
     return;
   }
   const { stops } = await res.json();
-  resultsBox.innerHTML = '';
-  stops.forEach(s => {
-    const div = el('div', '', s.name);
-    div.onclick = () => selectStop(s.id, s.name, 'search');
-    resultsBox.appendChild(div);
-  });
+  if (request !== searchCounter) return;
+  showResults(stops, q.trim());
 }
 
 // `source` says where the stop was picked ('search', 'link' or 'map'), so the
 // map knows whether it should move there
 function selectStop(id, name, source = 'search') {
   input.value = name;
-  resultsBox.innerHTML = '';
+  searchCounter++;   // an answer still on its way must not open the list again
+  showResults([]);
   currentStopId = id;
   selectedFrom = source;
   announced = false;
