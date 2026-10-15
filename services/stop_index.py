@@ -310,55 +310,100 @@ class StopIndex:
 
     # --- a whole query ---------------------------------------------------------
 
-    def search(self, query: str, near: tuple | None = None, radius_km: float = 10.0, limit: int = 10) -> list:
-        """Up to `limit` stops for `query`, best first, as dicts with the
-        stop's row plus `score` and `text` (how well the words matched, 0-1).
-        `near` is (lat, lon) of where the map is, `radius_km` how far it shows."""
-        tokens = [token[:MAX_WORD_LENGTH] for token in words_of(query)[:MAX_WORDS]]
-        if not tokens or len("".join(tokens)) < 2:
-            return []
-        ends_open = not query.endswith(" ")   # the last word may still be growing
-        matched = None                          # stop number -> [score per typed word, {positions matched}]
-        for place, token in enumerate(tokens):
-            still_typing = ends_open and place == len(tokens) - 1
-            here = {}
-            for word, score in self.matching_words(token, still_typing).items():
-                for number, position in self.word_stops[word]:
-                    stop = self.stops[number]
-                    if stop["trains_only_word"] and position == len(stop["words"]) - 1:
-                        score_here = min(score, TRAIN_STATION)
-                    else:
-                        score_here = score
-                    if score_here > here.get(number, (0, None))[0]:
-                        here[number] = (score_here, position)
-            for city, numbers in self.city_stops.items():
-                score = CITY if city in (token, without_e(token)) else (
-                    CITY - 0.1 if still_typing and len(token) >= 3 and city.startswith(token) else 0)
-                if score:
-                    for number in numbers:
-                        if score > here.get(number, (0, None))[0]:
-                            here[number] = (score, None)
+    def stops_of_word(self, token: str, still_typing: bool) -> dict:
+        """The stops one typed word fits: stop number -> (score, position of
+        the word of the name it fits, or None for the stop's city)."""
+        here = {}
+        for word, score in self.matching_words(token, still_typing).items():
+            for number, position in self.word_stops[word]:
+                stop = self.stops[number]
+                if stop["trains_only_word"] and position == len(stop["words"]) - 1:
+                    score_here = min(score, TRAIN_STATION)
+                else:
+                    score_here = score
+                if score_here > here.get(number, (0, None))[0]:
+                    here[number] = (score_here, position)
+        for city, numbers in self.city_stops.items():
+            score = CITY if city in (token, without_e(token)) else (
+                CITY - 0.1 if still_typing and len(token) >= 3 and city.startswith(token) else 0)
+            if score:
+                for number in numbers:
+                    if score > here.get(number, (0, None))[0]:
+                        here[number] = (score, None)
+        return here
+
+    @staticmethod
+    def matching_all(found: list) -> dict:
+        """The stops every one of these words fits:
+        stop number -> ([score per word], {positions of the name's words})."""
+        matched = None
+        for here in found:
             if matched is None:
                 matched = {number: ([score], {position}) for number, (score, position) in here.items()}
             else:
                 matched = {number: (scores + [here[number][0]], positions | {here[number][1]})
                            for number, (scores, positions) in matched.items() if number in here}
             if not matched:
-                return []
+                return {}
+        return matched or {}
 
-        results = []
-        for number, (scores, positions) in matched.items():
-            stop = self.stops[number]
-            # A name that is just what was typed beats one that goes on
-            # ("Bruchsal" / "Bruchsal Tunnelstraße"): every word of the name that
-            # was asked for counts in full, every other one by its weight.
-            # ("Bahnhof" for a stop with trains counts like a word of its name:
-            # being the station is what was asked for.)
-            asked_for = len({p for p in positions if p is not None})
-            left_over = sum(weight for p, weight in enumerate(stop["weights"]) if p not in positions)
-            text = sum(scores) / len(scores) * (0.85 + 0.15 * (asked_for / (asked_for + left_over) if asked_for else 0.0))
-            results.append({**stop, "text": round(text, 4),
-                            "score": final_score(text, stop["importance"], stop["lat"], stop["lon"], near, radius_km)})
+    def matching_part(self, tokens: list, found: list) -> list:
+        """When no stop fits every typed word ("Insel Mainau", "Stuttgart Hbf
+        Gleis 5"): the stops that fit the others once the words that fit no
+        stop at all are left out, or else all but one word. As [(stops like
+        `matching_all`'s, share of the typed letters they fit)]; the share
+        scales their scores, so the stops that fit more come first."""
+        if len(tokens) < 2:
+            return []
+        letters = sum(len(token) for token in tokens)
+        share = lambda keep: sum(len(tokens[i]) for i in keep) / letters  # noqa: E731
+        alive = [i for i, here in enumerate(found) if here]
+        if alive and len(alive) < len(tokens):
+            group = self.matching_all([found[i] for i in alive])
+            if group:
+                return [(group, share(alive))]
+        groups = []
+        if len(alive) >= 2:
+            for left_out in alive:
+                keep = [i for i in alive if i != left_out]
+                group = self.matching_all([found[i] for i in keep])
+                if group:
+                    groups.append((group, share(keep)))
+        return groups
+
+    def search(self, query: str, near: tuple | None = None, radius_km: float = 10.0, limit: int = 10) -> list:
+        """Up to `limit` stops for `query`, best first, as dicts with the
+        stop's row plus `score`, `text` (how well the words matched, 0-1) and
+        `partial` (no stop fits every word; these fit some of them).
+        `near` is (lat, lon) of where the map is, `radius_km` how far it shows."""
+        tokens = [token[:MAX_WORD_LENGTH] for token in words_of(query)[:MAX_WORDS]]
+        if not tokens or len("".join(tokens)) < 2:
+            return []
+        ends_open = not query.endswith(" ")   # the last word may still be growing
+        found = [self.stops_of_word(token, ends_open and place == len(tokens) - 1) for place, token in enumerate(tokens)]
+        matched = self.matching_all(found)
+        groups = [(matched, 1.0)] if matched else self.matching_part(tokens, found)
+
+        best = {}
+        for group, share in groups:
+            for number, (scores, positions) in group.items():
+                stop = self.stops[number]
+                # A name that is just what was typed beats one that goes on
+                # ("Bruchsal" / "Bruchsal Tunnelstraße"): every word of the name that
+                # was asked for counts in full, every other one by its weight.
+                # ("Bahnhof" for a stop with trains counts like a word of its name:
+                # being the station is what was asked for.)
+                asked_for = len({p for p in positions if p is not None})
+                left_over = sum(weight for p, weight in enumerate(stop["weights"]) if p not in positions)
+                text = sum(scores) / len(scores) * (0.85 + 0.15 * (asked_for / (asked_for + left_over) if asked_for else 0.0))
+                text *= share
+                if number in best and best[number]["text"] >= text:
+                    continue
+                best[number] = {**stop, "text": round(text, 4), "partial": not matched,
+                                "score": final_score(text, stop["importance"], stop["lat"], stop["lon"], near, radius_km)}
+        if not best:
+            return []
+        results = list(best.values())
         results.sort(key=lambda r: (-r["score"], -r["importance"], r["id"]))
         return [r for r in results[:limit] if r["score"] >= WORTH_SHOWING * results[0]["score"]]
 

@@ -138,7 +138,9 @@ def search_place(near: str, radius: str) -> tuple:
 
 def search(query: str, near: str = "", radius: str = "", limit: str = "") -> list:
     """Stops matching `query`, best match first, as
-    [{id, name, lat, lon, types: [{id, name}]}].
+    [{id, name, lat, lon, types: [{id, name}], partial}].
+    `partial` is true for a stop that fits only some of the words, which is
+    all there is when no stop fits every word ("Insel Mainau").
 
     Two searches run side by side and are ranked together: the one over the
     stop database (services/stop_index.py: forgiving of spelling, knows how
@@ -177,13 +179,14 @@ def search(query: str, near: str = "", radius: str = "", limit: str = "") -> lis
     candidates = {}
     for row in own or []:
         candidates[row["id"]] = {"id": row["id"], "name": stop_index.display_name(row["name"], row["id"]), "lat": row["lat"],
-                                 "lon": row["lon"], "types": types_of(row), "score": row["score"]}
+                                 "lon": row["lon"], "types": types_of(row), "score": row["score"], "partial": row.get("partial", False)}
     for rank, stop in enumerate(found):
         entry = candidates.get(stop["id"])
         types = [{"id": t["id"], "name": t["name"]} for t in parse.tabs_for(stop["classes"])]
         if entry:
             # both agree: the timetable service's name is the one the board will show
-            entry.update(name=stop["name"], score=round(entry["score"] * 1.05, 4))
+            # (and it found it for all the words, even if our own search did not)
+            entry.update(name=stop["name"], score=round(entry["score"] * 1.05, 4), partial=False)
             entry["types"] = types or entry["types"]
             continue
         # Found by the timetable service alone (it resolved a typo, or knows
@@ -192,7 +195,8 @@ def search(query: str, near: str = "", radius: str = "", limit: str = "") -> lis
         text = 0.5 + 0.3 * stop["quality"] / 1000 - 0.01 * min(rank, 10)
         importance = known_importance(stop["id"]) or 1.0
         candidates[stop["id"]] = {"id": stop["id"], "name": stop["name"], "lat": stop["lat"], "lon": stop["lon"], "types": types,
-                                  "score": stop_index.final_score(text, importance, stop["lat"], stop["lon"], place, radius_km)}
+                                  "score": stop_index.final_score(text, importance, stop["lat"], stop["lon"], place, radius_km),
+                                  "partial": False}
 
     ranked = sorted(candidates.values(), key=lambda c: (-c["score"], c["name"], c["id"]))
     if ranked:
@@ -208,7 +212,7 @@ def search(query: str, near: str = "", radius: str = "", limit: str = "") -> lis
         name = c["name"]
         if names[name] > 1 and c["types"]:
             name = f"{name} · {', '.join(t['name'] for t in c['types'])}"
-        results.append({"id": c["id"], "name": name, "lat": c["lat"], "lon": c["lon"], "types": c["types"]})
+        results.append({"id": c["id"], "name": name, "lat": c["lat"], "lon": c["lon"], "types": c["types"], "partial": c["partial"]})
     names = Counter(r["name"] for r in results)
     for r in results:
         district = stop_index.DISTRICTS.get(r["id"].split(":")[1] if r["id"].count(":") >= 2 else "")

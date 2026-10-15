@@ -160,7 +160,8 @@ class IndexTest(unittest.TestCase):
         self.assertEqual(self.first("Karlsruhe Turmberg"), "Durlach Turmberg")
         self.assertEqual(self.first("Karlsruhe Marktplatz"), "KA Marktplatz (Kaiserstraße U)")
         self.assertEqual(self.first("Stuttgart Schlossplatz", KARLSRUHE), "Schlossplatz")
-        self.assertEqual(self.index.search("Stuttgart Turmberg"), [])    # Turmberg is in Karlsruhe
+        # Turmberg is in Karlsruhe: no stop fits both words
+        self.assertTrue(all(r["partial"] for r in self.index.search("Stuttgart Turmberg")))
 
     def test_abbreviations_in_names(self):
         self.assertEqual(self.first("Sindelfingen Goldberg"), "Sindelf. Goldberg")
@@ -216,9 +217,30 @@ class IndexTest(unittest.TestCase):
         self.assertEqual(self.first("Tübingen", KARLSRUHE), "Tübingen Hauptbahnhof")
         self.assertEqual(self.first("Pragfriedhof", KARLSRUHE), "Pragfriedhof")
 
-    def test_every_word_has_to_fit(self):
-        self.assertEqual(self.index.search("Ludwigsburg Pragfriedhof"), [])
-        self.assertEqual(names(self.index.search("Ulm Rathaus")), ["Ulm Rathaus"])
+    def test_stops_that_fit_every_word_come_alone(self):
+        results = self.index.search("Ulm Rathaus")
+        self.assertEqual(names(results), ["Ulm Rathaus"])
+        self.assertFalse(results[0]["partial"])
+
+    def test_a_word_that_fits_no_stop_is_left_out(self):
+        # "Insel Mainau", "Stuttgart Hbf Gleis 5": the other words still find the stop
+        results = self.index.search("Ulm Rathaus Gleisxq 5")
+        self.assertEqual(names(results)[0], "Ulm Rathaus")
+        self.assertTrue(all(r["partial"] for r in results))
+        self.assertEqual(self.first("xqzw Pragfriedhof"), "Pragfriedhof")
+        # what fits fewer of the typed letters scores less than a full match would
+        self.assertLess(self.index.search("Pragfriedhof xqzwvb")[0]["text"], self.index.search("Pragfriedhof")[0]["text"])
+        # one word alone that fits nothing still finds nothing
+        self.assertEqual(self.index.search("xqzw"), [])
+        self.assertEqual(self.index.search("xqzw vbnm"), [])
+
+    def test_when_no_stop_fits_every_word_all_but_one_do(self):
+        results = self.index.search("Ludwigsburg Pragfriedhof")
+        self.assertTrue(results and all(r["partial"] for r in results))
+        self.assertIn("Ludwigsburg", names(results))
+        self.assertIn("Pragfriedhof", names(results))
+        # the stop that fits more of the words comes first
+        self.assertEqual(self.first("Ulm Rathaus Pragfriedhof"), "Ulm Rathaus")
 
     def test_finished_word_is_not_a_beginning_any_more(self):
         typing = self.index.search("Ulm")
@@ -287,7 +309,7 @@ class CombinedSearchTest(unittest.TestCase):
     def test_shape_and_names(self):
         results = stops.search("Pragfriedhof")
         self.assertEqual(results, [{"id": "de:08111:115", "name": "Stuttgart, Pragfriedhof", "lat": 48.7981, "lon": 9.1826,
-                                    "types": [{"id": "tram", "name": "U-Bahn / Tram"}]}])
+                                    "types": [{"id": "tram", "name": "U-Bahn / Tram"}], "partial": False}])
         self.assertEqual([t["id"] for t in stops.search("Vaihingen")[0]["types"]], ["trains", "sbahn", "tram", "bus"])
 
     def test_both_know_the_stop(self):
@@ -338,11 +360,22 @@ class CombinedSearchTest(unittest.TestCase):
         self.assertEqual(names(stops.search("Prag")), ["Stuttgart, Pragfriedhof", "Stuttgart, Pragsattel"])
 
     def test_same_name_twice(self):
+        # (the timetable service's answers alone: these stops are not in the made-up database)
+        stops.own_matches = lambda *args: []
         self.efa = [self.efa_stop("de:08317:1", "Kehl, Bahnhof", classes=(0,)), self.efa_stop("de:08317:2", "Kehl, Bahnhof", classes=(5,))]
         self.assertEqual(sorted(names(stops.search("Kehl Bahnhof"))), ["Kehl, Bahnhof · Bus", "Kehl, Bahnhof · Trains"])
         # nothing but the district tells these two apart
         self.efa = [self.efa_stop("de:08116:1", "Rathaus"), self.efa_stop("de:08119:2", "Rathaus")]
-        self.assertEqual(sorted(names(stops.search("Rathaus xx"))), ["Rathaus · Bus (Kreis Esslingen)", "Rathaus · Bus (Rems-Murr-Kreis)"])
+        self.assertEqual(sorted(names(stops.search("Rathaus"))), ["Rathaus · Bus (Kreis Esslingen)", "Rathaus · Bus (Rems-Murr-Kreis)"])
+
+    def test_partial_matches(self):
+        results = stops.search("Ulm Rathaus Gleisxq")
+        self.assertEqual(names(results)[0], "Ulm, Rathaus".replace(", ", " "))
+        self.assertTrue(all(r["partial"] for r in results))
+        # the timetable service found it for all the words: then it is no partial match
+        self.efa = [self.efa_stop("de:08421:1200", "Ulm, Rathaus", lat=48.397, lon=9.993)]
+        results = stops.search("Ulm Rathaus Gleisxq")
+        self.assertEqual((results[0]["name"], results[0]["partial"]), ("Ulm, Rathaus", False))
 
     def test_near_and_limit(self):
         self.assertEqual(names(stops.search("Schlossplatz", near="49.0093,8.4040", radius="6"))[0], "Karlsruhe, Durlach Schlossplatz")
@@ -357,7 +390,8 @@ class CombinedSearchTest(unittest.TestCase):
         res = self.http.get("/api/v1/stops/search?q=Schlossplatz&near=49.0093,8.4040&radius=6&limit=1")
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.get_json(), {"stops": [{"id": "de:08212:89", "name": "Karlsruhe, Durlach Schlossplatz", "lat": 48.999, "lon": 8.472,
-                                                     "types": [{"id": "tram", "name": "U-Bahn / Tram"}, {"id": "bus", "name": "Bus"}]}]})
+                                                     "types": [{"id": "tram", "name": "U-Bahn / Tram"}, {"id": "bus", "name": "Bus"}],
+                                                     "partial": False}]})
         bad = self.http.get("/api/v1/stops/search?q=Schlossplatz&near=here")
         self.assertEqual((bad.status_code, bad.get_json()["error"]["code"]), (400, "invalid_parameter"))
         self.assertEqual(self.http.get("/api/v1/stops/search?q=a").get_json(), {"stops": []})

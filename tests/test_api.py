@@ -115,6 +115,7 @@ class SearchTest(ApiTestCase):
             "lat": 48.784729,
             "lon": 9.183172,
             "types": [{"id": "trains", "name": "Trains"}],
+            "partial": False,
         }]})
 
     def test_only_stops_in_baden_wuerttemberg(self):
@@ -508,6 +509,13 @@ class ErrorTest(ApiTestCase):
 
     def test_unknown_stop(self):
         self.assert_error(self.http.get("/api/v1/stops/nonsense/departures"), 404, "unknown_stop")
+
+    def test_only_the_stop_asked_for(self):
+        # the timetable service makes a stop out of any text ("..", a name): that is not this stop
+        client.get_station = lambda stop_id: self.station
+        for wrong in ("..", "Stuttgart Hbf", "de:08111:61150", f"{STOP}:2:2"):
+            self.assert_error(self.http.get(f"/api/v1/stops/{wrong}/departures"), 404, "unknown_stop")
+        self.assertEqual(self.http.get(f"/api/v1/stops/{STOP}/departures").status_code, 200)
 
     def test_stop_outside_baden_wuerttemberg(self):
         client.get_station = lambda stop_id: {"locations": [{"id": "de:09162:100", "name": "München, Hbf", "type": "stop"}]}

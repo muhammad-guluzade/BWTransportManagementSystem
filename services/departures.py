@@ -148,11 +148,14 @@ def trip(stop_id: str, departure_id: str) -> dict:
 
 def dedupe(departures: list) -> list:
     """EFA sometimes sends one trip twice: the timetable entry plus a copy
-    created from live data. Keep one, preferring the copy with live data."""
+    created from live data, or two timetable entries. Keep one, preferring
+    the copy with live data; between equals always the same one (the
+    smallest id), since EFA's order of the copies changes from one request
+    to another, and the id must not."""
     kept = {}
     for dep in departures:
         key = (dep["mode"], dep["platform"], dep["platform_area"], dep["line"], dep["destination"], dep["planned"])
-        if key not in kept or (dep["realtime"] and not kept[key]["realtime"]):
+        if key not in kept or (not dep["realtime"], dep["id"]) < (not kept[key]["realtime"], kept[key]["id"]):
             kept[key] = dep
     # Near the Swiss border the same train also comes from a second timetable,
     # without a platform (Waldshut: "S27, platform 5" and "S27" again). The
@@ -180,6 +183,12 @@ def position(dep: dict) -> tuple | None:
     return None if lat is None or lon is None else (lat, lon)
 
 
+def station_level(platform_id: str) -> bool:
+    """Is this the id of a whole station ("de:08226:4252") rather than of one
+    of its platforms ("de:08226:4252:3:2")?"""
+    return platform_id.count(":") < 3
+
+
 def split_platforms(rows: list) -> list:
     """The departures under one platform label, as one list per physical
     platform.
@@ -189,7 +198,9 @@ def split_platforms(rows: list) -> list:
     the planned one's id, and some stations are in the data twice. A label
     that is only EFA's internal number is not: two bus bays of one station
     can both be number 1. Those are told apart by their ids, unless they sit
-    on the same spot."""
+    on the same spot. A departure that carries only the station's id (no
+    platform part, as EFA sometimes sends) says nothing about which platform
+    it is, so it joins the nearest one of its label."""
     together = [dep for dep in rows if dep.get("platform_named") or not dep.get("platform_id") or position(dep) is None]
     groups = []  # [{"spots": [(lat, lon)], "rows": [...]}]
     if together:
@@ -199,10 +210,13 @@ def split_platforms(rows: list) -> list:
     for dep in rows:
         if not any(dep is other for other in together):
             by_id.setdefault(dep["platform_id"], []).append(dep)
-    # the busiest first, so that a stray id joins the main platform and not the other way round
-    for platform_id, members in sorted(by_id.items(), key=lambda item: (-len(item[1]), item[0])):
+    # the busiest first, so that a stray id joins the main platform and not the
+    # other way round; the station's own id last
+    for platform_id, members in sorted(by_id.items(), key=lambda item: (station_level(item[0]), -len(item[1]), item[0])):
         spot = position(members[0])
         home = next((g for g in groups if any(metres(spot, other) <= SAME_SPOT_METRES for other in g["spots"])), None)
+        if not home and station_level(platform_id) and groups:
+            home = min(groups, key=lambda g: min((metres(spot, other) for other in g["spots"]), default=math.inf))
         if home:
             home["rows"] += members
             home["spots"].append(spot)
@@ -268,7 +282,8 @@ def group_departures(departures: list) -> list:
             if twins[(label, area)] > 1 and heading:
                 # "or": stop names have commas of their own ("Sinsheim, Egerlandstraße")
                 name += " · towards " + " or ".join(heading)
-            rows = sorted(rows, key=lambda d: (d["minutes"] is None, d["minutes"]))
+            # by the time itself: two departures in the same minute keep their seconds' order
+            rows = sorted(rows, key=lambda d: (d["time"] is None, d["time"] or ""))
             code = rows[0]["platform_code"]
             for row in rows:
                 for field in PLATFORM_FIELDS:
@@ -433,9 +448,10 @@ def board(stop_id: str, tab_id: str = "", platform_id: str = "") -> dict:
     With `platform_id` the board holds that platform's departures only, see
     `platform_board`."""
     station = parse.parse_station(client.get_station(stop_id))
-    # EFA resolves an id it doesn't know to whatever stop matches loosely,
-    # anywhere in Europe; only accept stations in Baden-Württemberg
-    if not station or not parse.in_baden_wuerttemberg(station["id"] or ""):
+    # EFA resolves an id it doesn't know, or any text, to whatever stop
+    # matches loosely, anywhere in Europe ("Stuttgart Hbf", even ".."): only
+    # the stop that was asked for counts, and only in Baden-Württemberg
+    if not station or station["id"] != stop_id or not parse.in_baden_wuerttemberg(stop_id):
         raise UnknownStop(stop_id)
     nearby = [n for n in station["nearby"] if parse.in_baden_wuerttemberg(n["id"])]
     if platform_id:

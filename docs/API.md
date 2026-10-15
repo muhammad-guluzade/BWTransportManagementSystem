@@ -100,6 +100,12 @@ What the search copes with:
   the important ones (a town's main station before a bus stop), and with
   `near` the close ones. Words that clearly mean another place win over
   the map: `Ulm` finds Ulm's main station also on a map of Stuttgart.
+- **Words that fit no stop.** Normally a stop has to fit every word. When
+  none does, the words that fit no stop at all are left out (`Stuttgart Hbf
+  Gleis 5`), or else one word at a time (`Insel Mainau` finds "Mainau"),
+  and the stops found that way have `partial: true`. A client should say
+  so ("No stop matches every word"): `München Hauptbahnhof` gives stops
+  called Hauptbahnhof in Baden-Württemberg this way.
 
 Results come from the stop database and from the timetable service's own
 search, ranked together. Either works without the other: without the stop
@@ -119,7 +125,8 @@ Example: `/api/v1/stops/search?q=Stuttgart Hauptbahnhof`
       "types": [
         {"id": "trains", "name": "Trains"},
         {"id": "sbahn", "name": "S-Bahn"}
-      ]
+      ],
+      "partial": false
     },
     {
       "id": "de:08111:6118",
@@ -128,7 +135,8 @@ Example: `/api/v1/stops/search?q=Stuttgart Hauptbahnhof`
       "lon": 9.180225,
       "types": [
         {"id": "sbahn", "name": "S-Bahn"}
-      ]
+      ],
+      "partial": false
     }
   ]
 }
@@ -140,6 +148,7 @@ Example: `/api/v1/stops/search?q=Stuttgart Hauptbahnhof`
 | `name` | The stop's name, with the town wherever it is known (`"Stuttgart, Pragfriedhof"`). When two results share a name, what stops there is appended (`"Kehl, Bahnhof · Bus"`), and the district if that is still not enough (`"Rathaus · Bus (Kreis Esslingen)"`). |
 | `lat`, `lon` | Position of the stop. |
 | `types` | Transport types listed for the stop (by the timetable service, or by the stop database for a stop only it found). A hint only: it can include a type that has no departures. The departures endpoint returns the verified list as `tabs`. |
+| `partial` | `true` if the stop fits only some of the words typed (see "Words that fit no stop"). Such stops only come when the stop database has no stop that fits all the words; the timetable service's own matches are never partial. |
 
 ### `GET /api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}&platforms={0|1}`
 
@@ -352,13 +361,13 @@ Tab ids: `trains`, `sbahn`, `tram`, `bus`, `ferry`, `cablecar`, `other`.
 | `id` | The platform as a place: the timetable service's id of it, e.g. `"de:08118:7402:5:15"`. Platforms with the same `code` differ in it (two bus bays both numbered 1). The same platform can appear under several modes, with the same `id`. `null` if unknown. |
 | `lat`, `lon` | Where the platform is, to show it on a map. `null` if the timetable service gives no position. |
 | `towards` | Where the departures listed here go next: the one or two most common next stops (`["Hbf/U.d.Linden", "Stadtmitte"]`). Can be empty. It describes the departures in this response, so it can change over the day. |
-| `departures` | Sorted by departure time. Up to the next 100 departures of the tab are loaded in total. |
+| `departures` | Sorted by departure time (`time`, to the second). Up to the next 100 departures of the tab are loaded in total. |
 
 **`modes[].platforms[].departures[]`**
 
 | Field | |
 |---|---|
-| `id` | Identifies this departure on this station's board. Use it to ask for the departure's stops (next endpoint). It stays the same from one refresh to the next, also when the live time changes. Treat it as an opaque text. |
+| `id` | Identifies this departure on this station's board. Use it to ask for the departure's stops (next endpoint). It stays the same from one refresh to the next, also when the live time changes, and on the board of its platform alone. Treat it as an opaque text. |
 | `line` | Line label: `"U7"`, `"RE5"`, `"ICE 1291"`. |
 | `destination` | Where the vehicle is signed to. The town is left out if it is the station's own. |
 | `via` | Up to two major stops on the way to `destination`, in travel order: names from the departure's stop list (next endpoint), never from beyond the destination. Empty if the destination is the next stop. |
@@ -416,7 +425,8 @@ a station whose trains are currently replaced by buses from the bus station):
   "tab": null,
   "modes": [],
   "empty": "nearby",
-  "next_service": null
+  "next_service": null,
+  "platform": null
 }
 ```
 
@@ -526,7 +536,7 @@ Errors use the matching HTTP status and always have this shape:
 | Status | `code` | When |
 |---|---|---|
 | 400 | `invalid_parameter` | A parameter is missing or malformed, e.g. `bbox`. The message says which. |
-| 404 | `unknown_stop` | The stop id doesn't exist or is outside Baden-Württemberg. |
+| 404 | `unknown_stop` | The stop id doesn't exist or is outside Baden-Württemberg. Only an exact stop id is accepted, not a name. |
 | 404 | `unknown_platform` | The platform id given to the departures endpoint is not one of that stop's. |
 | 404 | `unknown_departure` | The departure id isn't one of this station's, or the departure is no longer in the timetable (it left a while ago). Load the board again. |
 | 404 | `not_found` | No such API address. |

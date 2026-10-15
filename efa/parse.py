@@ -149,12 +149,6 @@ def tab_of(transportation: dict) -> str:
     return next((tab_id for tab_id, _, classes in TABS if cls in classes), OTHER_TAB[0])
 
 
-def tab_names(classes) -> str:
-    """'Trains, Bus' -- what stops at a station, for telling apart two
-    search results with the same name."""
-    return ", ".join(tab["name"] for tab in tabs_for(classes))
-
-
 def parse_station(station_response: dict) -> dict | None:
     """A station as {id, name, lat, lon, classes, nearby: [{id, name, lat,
     lon, classes}]}, or None if EFA doesn't know the stop id."""

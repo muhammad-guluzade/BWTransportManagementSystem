@@ -50,6 +50,10 @@ const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin' }
 const weekdayFormat = new Intl.DateTimeFormat('en-GB', { weekday: 'short', timeZone: 'Europe/Berlin' });
 const dateFormat = new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Berlin' });
 const longDateFormat = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+// when the board was last updated, in the same time as the departures
+const clockFormat = new Intl.DateTimeFormat('de-DE', {
+  hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Europe/Berlin',
+});
 // a clock time alone is ambiguous from this many minutes ahead on
 const SHOW_DAY_FROM_MINUTES = 12 * 60;
 
@@ -110,6 +114,10 @@ function showResults(stops, nothingFor = '') {
     resultsBox.appendChild(row);
   });
   if (!stops.length && nothingFor) resultsBox.appendChild(el('div', 'no-result', `No stop found for "${nothingFor}".`));
+  // no stop fits every word: these fit some of them
+  if (stops.length && stops.every(stop => stop.partial)) {
+    resultsBox.prepend(el('div', 'no-result', `No stop matches every word of "${nothingFor}". Stops that match part of it:`));
+  }
 }
 
 async function searchStops(q) {
@@ -157,6 +165,7 @@ function selectStop(id, name, source = 'search') {
 
 function selectTab(tabId) {
   currentTab = tabId;
+  document.querySelectorAll('.tab').forEach(button => button.classList.toggle('active', button.dataset.tab === tabId));
   shownCount.clear();
   closeStops();
   clearPlatformMark();
@@ -172,12 +181,13 @@ async function loadDepartures() {
   try {
     res = await fetch(url);
   } catch {
-    if (request === requestCounter) status.textContent = 'Could not load departures.';
+    if (request === requestCounter) showLoadError('Could not load departures.', true);
     return;
   }
   if (request !== requestCounter) return;  // the user has moved on
   if (!res.ok) {
-    status.textContent = await errorMessage(res, 'Could not load departures.');
+    const message = await errorMessage(res, 'Could not load departures.');
+    if (request === requestCounter) showLoadError(message, res.status >= 500);
     return;
   }
   lastData = await res.json();
@@ -192,7 +202,17 @@ async function loadDepartures() {
     input.value = lastData.stop.name;
     document.dispatchEvent(new CustomEvent('stop-shown', { detail: { stop: lastData.stop, source: selectedFrom } }));
   }
-  status.textContent = 'Updated ' + new Date().toLocaleTimeString();
+  status.textContent = 'Updated ' + clockFormat.format(new Date());
+}
+
+// A failed refresh keeps the board that is shown; a board that was still
+// empty (a new stop or tab) shows the message in its place. `retrying`: the
+// failure may pass (no connection, the timetable service down)
+function showLoadError(message, retrying) {
+  status.textContent = message;
+  if (!board.hasChildNodes()) {
+    board.appendChild(el('div', 'notice', retrying ? `${message} The page tries again every 30 seconds.` : message));
+  }
 }
 
 function render() {
@@ -337,6 +357,7 @@ function renderStation(data) {
     const tabs = el('div', 'tabs');
     data.tabs.forEach(tab => {
       const button = el('button', tab.id === data.tab ? 'tab active' : 'tab', tab.name);
+      button.dataset.tab = tab.id;
       button.onclick = () => selectTab(tab.id);
       tabs.appendChild(button);
     });
