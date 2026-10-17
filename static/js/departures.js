@@ -12,6 +12,9 @@ const peekBox = document.getElementById('peek');
 let debounceTimer;
 let refreshTimer;
 
+// the browser tab's title; with a stop shown: "<stop> · BW Departures"
+const PAGE_TITLE = document.title;
+
 // How often the departures board gets updated
 const REFRESH_MS = 30000;
 // How many departures a platform shows at first, and how many more each
@@ -232,8 +235,9 @@ async function searchStops(q) {
   showResults(stops, q.trim());
 }
 
-// `source` says where the stop was picked ('search', 'link' or 'map'), so the
-// map knows whether it should move there
+// `source` says where the stop was picked ('search', 'link' or 'map'; or
+// address.js: 'address' = the page was opened at the stop's own address,
+// 'history' = the Back button), so the map knows whether it should move there
 function selectStop(id, name, source = 'search') {
   input.value = name;
   pickedName = name;
@@ -256,7 +260,7 @@ function selectStop(id, name, source = 'search') {
   rawBox.innerHTML = '';
   peekBox.innerHTML = '';
   lastData = null;
-  status.textContent = `Loading departures for ${name}...`;
+  status.textContent = name ? `Loading departures for ${name}...` : 'Loading departures...';
   loadDepartures();
   clearInterval(refreshTimer);
   refreshTimer = setInterval(loadDepartures, REFRESH_MS);
@@ -281,6 +285,7 @@ function closeStop() {
   pickedName = '';
   showClear();
   document.body.classList.remove('has-stop');
+  document.title = PAGE_TITLE;
   document.dispatchEvent(new CustomEvent('stop-cleared'));
 }
 document.getElementById('panel-close').addEventListener('click', closeStop);
@@ -344,6 +349,7 @@ async function loadDepartures() {
     pickedName = lastData.stop.name;
     if (document.activeElement !== input) input.value = pickedName;
     showClear();
+    document.title = `${pickedName} · ${PAGE_TITLE}`;
     document.dispatchEvent(new CustomEvent('stop-shown', { detail: { stop: lastData.stop, source: selectedFrom } }));
   }
   status.textContent = 'Updated ' + clockFormat.format(new Date());
@@ -486,12 +492,14 @@ function clearPlatformMark() {
 }
 
 function closeStops() {
+  const wasOpen = openDeparture !== null;
   openDeparture = null;
   openPlatform = null;
   openTrip = null;
   openTripUrl = '';
   openTripError = '';
   showEarlier = false;
+  if (wasOpen) document.dispatchEvent(new CustomEvent('departure-changed'));   // for the Back button (address.js)
 }
 
 // a click on a departure lists its stops under it and marks its platform on
@@ -505,6 +513,7 @@ function toggleStops(dep, mode, platform) {
   }
   closeStops();
   openDeparture = dep.id;
+  document.dispatchEvent(new CustomEvent('departure-changed'));
   openPlatform = platformKey(mode, platform);
   markPlatform(mode, platform, 'departure');
   render();
@@ -578,11 +587,19 @@ function renderRaw() {
   }
 }
 
-// a link that opens another station
+// a stop's own address (address.js); its colons stay readable
+const stopAddress = id => '/stop/' + encodeURIComponent(id).replace(/%3A/gi, ':');
+
+// a link that opens another station: here on the page, or (Ctrl-click,
+// middle click, a long press on a phone) in a new tab at the stop's address
 function stopLink(stop) {
   const link = el('a', '', stop.name);
-  link.href = '#';
-  link.onclick = (e) => { e.preventDefault(); selectStop(stop.id, stop.name, 'link'); };
+  link.href = stopAddress(stop.id);
+  link.onclick = (e) => {
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    selectStop(stop.id, stop.name, 'link');
+  };
   return link;
 }
 

@@ -620,3 +620,37 @@ class ErrorTest(ApiTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PageTest(unittest.TestCase):
+    """The page itself: its addresses and how its files are cached (app.py)."""
+
+    def setUp(self):
+        self.http = app.test_client()
+
+    def test_start_and_stop_addresses_are_the_page(self):
+        start = self.http.get("/")
+        self.assertEqual(start.status_code, 200)
+        for address in ("/stop/de:08111:6115", "/stop/de%3A08111%3A6115", "/stop/anything"):
+            res = self.http.get(address)
+            self.assertEqual(res.status_code, 200, address)
+            self.assertEqual(res.data, start.data, address)
+            self.assertEqual(res.headers["Cache-Control"], "no-cache")
+        self.assertEqual(self.http.get("/stop/").status_code, 404)
+
+    def test_page_files_carry_their_version(self):
+        page = self.http.get("/").get_data(as_text=True)
+        for name in ("css/style.css", "js/menu.js", "js/departures.js", "js/sheet.js", "js/map.js", "js/address.js"):
+            self.assertRegex(page, rf'/static/{name}\?v=\d+"', name)
+        self.assertLess(page.index("js/map.js"), page.index("js/address.js"))   # address.js opens the stop: last
+
+    def test_versioned_files_are_kept_long(self):
+        page = self.http.get("/").get_data(as_text=True)
+        versioned = page[page.index("/static/js/map.js"):].split('"')[0]
+        res = self.http.get(versioned)
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("max-age=31536000", res.headers["Cache-Control"])
+        res.close()
+        res = self.http.get("/static/js/map.js")   # without a version: asked again every time
+        self.assertNotIn("max-age=31536000", res.headers.get("Cache-Control", ""))
+        res.close()

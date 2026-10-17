@@ -87,6 +87,7 @@
     const wasOpen = state !== 'peek';
     const putBack = window.holdList ? holdList() : () => {};
     if (wasOpen && next === 'peek') lastSeen = putBack;
+    const changed = state !== next;
     state = next;
     document.body.classList.toggle('sheet-animate', animate);
     ['peek', 'half', 'full'].forEach(s => document.body.classList.toggle(`sheet-${s}`, s === state));
@@ -99,6 +100,7 @@
     }
     grip.setAttribute('aria-label', state === 'full' ? 'Show the map again' : 'Show more of the departures');
     screensBar.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String((b.dataset.screen === 'list') === (state === 'full'))));
+    if (changed) document.dispatchEvent(new CustomEvent('sheet-changed'));   // for the Back button (address.js)
   }
 
   // ---------- dragging (the sheet only) ----------
@@ -190,10 +192,12 @@
   });
 
   // ---------- what the rest of the page asks for ----------
-  // a stop was picked: show its departures (a full sheet stays full)
-  document.addEventListener('stop-picked', () => {
+  // a stop was picked: show its departures (a full sheet stays full). Gone
+  // back to with the Back button: the sheet stays as it is.
+  document.addEventListener('stop-picked', (e) => {
     picked = true;
     lastSeen = null;   // another stop's list
+    if (e.detail.source === 'history') return;
     if (screens()) setState('full');
     else if (state === 'peek') setState('half');
   });
