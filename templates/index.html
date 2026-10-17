@@ -2,18 +2,30 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<!-- viewport-fit=cover: the page may run under a phone's notch and home bar; the stylesheet keeps content clear of them -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f4f5f7">
 <title>BW Departures</title>
+<!-- the theme chosen in the menu (menu.js), applied before anything is drawn; none chosen: the device's -->
+<script>
+  try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) { /* no storage: the device's theme */ }
+</script>
 <!-- Leaflet draws the map (its stylesheet is required for it to render correctly) -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
 
-<header>
-  <h1>Baden-Württemberg Departures</h1>
+<!-- One page, two layouts (style.css): on phones and tablets the map fills the
+     screen and the panel is a sheet that slides up from the bottom (sheet.js);
+     on wider screens the map is on the left and the panel on the right. -->
+<header id="top">
+  <p class="brand">BW <span>Departures</span></p>
   <div id="search-box">
-    <input type="text" id="stop-input" placeholder="Search a stop, e.g. Pragfriedhof" autocomplete="off">
-    <div id="results"></div>
+    <input type="search" id="stop-input" placeholder="Search a stop" autocomplete="off" enterkeyhint="search" aria-label="Search a stop"
+           role="combobox" aria-controls="results" aria-expanded="false" aria-autocomplete="list">
+    <button type="button" id="search-clear" aria-label="Clear the search">&#x2715;</button>
+    <div id="results" role="listbox"></div>
   </div>
 </header>
 
@@ -21,27 +33,78 @@
   <section id="map-area">
     <div id="map"></div>
     <div id="map-note" hidden></div>
-    <div id="legend">
-      <span><i class="dot mode-rail"></i>Train</span>
-      <span><i class="dot mode-sbahn"></i>S-Bahn</span>
-      <span><i class="dot mode-ubahn"></i>U-Bahn (Stadtbahn)</span>
-      <span><i class="dot mode-tram"></i>Tram</span>
-      <span><i class="dot mode-bus"></i>Bus</span>
-    </div>
+    <button type="button" id="menu-toggle" aria-controls="settings" aria-expanded="false" aria-label="Settings">&#x22EF;</button>
   </section>
 
-  <section id="panel">
-    <div id="station"></div>
-    <div id="status">Search for a stop, or click one on the map, to see its departures.</div>
+  <section id="panel" aria-label="Departures">
+    <div id="panel-head">
+      <button type="button" id="sheet-grip" aria-label="Show more of the departures"></button>
+      <button type="button" id="panel-close" aria-label="Close the departures">&#x2715;</button>
+      <button type="button" id="sheet-map">Map</button>
+      <div id="station"></div>
+      <div id="peek"></div>
+      <div id="status">Search a stop or tap one on the map.</div>
+    </div>
     <div id="board"></div>
     <div id="raw"></div>
   </section>
 </main>
 
-<footer id="credits"></footer>
+<!-- phones, "Two screens" layout (sheet.js): switches between the map and the departures -->
+<nav id="screens-bar" aria-label="Map or departures">
+  <button type="button" data-screen="map">Map</button>
+  <button type="button" data-screen="list">Departures</button>
+</nav>
+
+<!-- settings (menu.js): over a blurred page, closed with the x or Escape -->
+<div id="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
+  <div class="settings-card">
+    <div class="settings-top">
+      <h2 id="settings-title">Settings</h2>
+      <button type="button" id="settings-close" aria-label="Close the settings">&#x2715;</button>
+    </div>
+    <section>
+      <h3>Theme</h3>
+      <div class="theme-choice" role="group" aria-label="Theme">
+        <button type="button" data-theme-choice="auto">Auto</button>
+        <button type="button" data-theme-choice="light">Light</button>
+        <button type="button" data-theme-choice="dark">Dark</button>
+      </div>
+      <p class="settings-note">Auto follows this device's setting.</p>
+    </section>
+    <section class="phone-only">
+      <h3>Phone layout</h3>
+      <div class="theme-choice" role="group" aria-label="Phone layout">
+        <button type="button" data-layout-choice="sheet">Sheet</button>
+        <button type="button" data-layout-choice="screens">Two screens</button>
+      </div>
+      <p class="settings-note">Sheet: the departures lie over the map; drag them up and down. Two screens: switch between map and departures at the bottom.</p>
+    </section>
+    <section>
+      <h3>Map colours</h3>
+      <div id="legend">
+        <span><i class="dot mode-rail"></i>Train</span>
+        <span><i class="dot mode-sbahn"></i>S-Bahn</span>
+        <span><i class="dot mode-ubahn"></i>U-Bahn (Stadtbahn)</span>
+        <span><i class="dot mode-tram"></i>Tram</span>
+        <span><i class="dot mode-bus"></i>Bus</span>
+      </div>
+    </section>
+    <section>
+      <h3>Data</h3>
+      <div id="credits">
+        <p>Departures: the live timetable service of Baden-Württemberg (<a href="https://www.efa-bw.de/" target="_blank">EFA-BW</a>)</p>
+        <p>Map: &copy; <a href="https://stadiamaps.com/" target="_blank">Stadia Maps</a>, &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a>,
+           &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors</p>
+      </div>
+    </section>
+  </div>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="{{ url_for('static', filename='js/menu.js') }}"></script>
 <script src="{{ url_for('static', filename='js/departures.js') }}"></script>
+<script src="{{ url_for('static', filename='js/sheet.js') }}"></script>
 <script src="{{ url_for('static', filename='js/map.js') }}"></script>
 
 </body>

@@ -35,21 +35,65 @@
   // markers are drawn this many pixels apart so that each can be clicked
   const SAME_SPOT_METRES = 3;
   const SAME_SPOT_SHIFT_PX = 16;
+  // fingers are less exact than a mouse: on touch screens the small dots are
+  // drawn a little bigger, and a tap this many pixels beside a dot still hits it
+  const TOUCH = window.matchMedia('(pointer: coarse)').matches;
+  const TAP_TOLERANCE_PX = TOUCH ? 12 : 3;
+  const SMALLEST_DOT_PX = TOUCH ? 7 : 5;
 
   const map = L.map('map', {
     maxBounds: BW.pad(0.1),       // the map can't be dragged away from BW
     maxBoundsViscosity: 1.0,
+    attributionControl: false,    // its credits are behind the small (i) button below
   });
   map.fitBounds(BW);
   map.setMinZoom(map.getZoom());  // ...or zoomed out beyond it
 
-  // the map images (roads, place names) come from OpenStreetMap's tile servers;
-  // their usage policy requires the attribution to stay visible
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  // The map images (roads, place names) come from Stadia Maps, made from
+  // OpenStreetMap data: their coloured "OSM Bright" style, or "Alidade Smooth
+  // Dark" when the page is dark (menu.js). The credits must stay visible.
+  // Without an account Stadia serves pages opened from this computer or the
+  // home network; a public address needs a (free) account with them.
+  const tileUrl = dark => `https://tiles.stadiamaps.com/tiles/${dark ? 'alidade_smooth_dark' : 'osm_bright'}/{z}/{x}/{y}{r}.png`;
+  const tiles = L.tileLayer(tileUrl(window.theme && window.theme.isDark()), {
     maxZoom: 19,
+    updateWhenIdle: false,   // load the map's pieces while it is dragged, not only once it stops (phones)
+    keepBuffer: 4,           // and keep more of them around the picture, ready for the next move
   }).addTo(map);
 
+  // The licences of the map and the stop data ask for credits on the map:
+  // a small (i) in its corner shows them (the full ones are in the settings).
+  const CREDITS = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors '
+    + '&middot; &copy; <a href="https://stadiamaps.com/" target="_blank">Stadia Maps</a> '
+    + '&middot; &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> '
+    + '&middot; stops: <a href="https://www.nvbw.de/open-data" target="_blank">NVBW</a>';
+  const Credits = L.Control.extend({
+    options: { position: 'bottomright' },
+    onAdd() {
+      const box = L.DomUtil.create('div', 'map-credits');
+      const text = L.DomUtil.create('div', 'map-credits-text', box);
+      text.innerHTML = CREDITS;
+      text.hidden = true;
+      const button = L.DomUtil.create('button', 'map-credits-button', box);
+      button.type = 'button';
+      button.textContent = 'i';
+      button.setAttribute('aria-label', 'Map credits');
+      button.setAttribute('aria-expanded', 'false');
+      button.addEventListener('click', () => {
+        text.hidden = !text.hidden;
+        button.setAttribute('aria-expanded', String(!text.hidden));
+      });
+      L.DomEvent.disableClickPropagation(box);   // a tap on it is not a tap on the map
+      return box;
+    },
+  });
+  new Credits().addTo(map);
+  document.addEventListener('theme-changed', (e) => tiles.setUrl(tileUrl(e.detail.dark)));
+
+  // the glow around the selected stop lies under the stops' dots
+  map.createPane('glow').style.zIndex = 390;
+  // the dots are drawn on a canvas, which can widen the spot a tap hits
+  const dotRenderer = L.canvas({ tolerance: TAP_TOLERANCE_PX });
   const stopsLayer = L.layerGroup().addTo(map);
   const selectedLayer = L.layerGroup().addTo(map);
   const platformLayer = L.layerGroup().addTo(map);
@@ -60,11 +104,57 @@
   // the map measures its box once; measure again whenever the layout changes it
   new ResizeObserver(() => map.invalidateSize()).observe(document.getElementById('map'));
 
-  // a ring around the selected stop
-  function drawRing(lat, lon) {
+  // On a phone the search box and the departures sheet lie over the map
+  // (sheet.js says how much of it they cover). What the map is asked to show
+  // goes in the middle of the part that is left free.
+  function covered() {
+    return (window.sheet && window.sheet.insets()) || { top: 0, bottom: 0 };
+  }
+
+  // What the page asks the map to show, it shows at once: a zoom without its
+  // animation (on iPhones that animation can get stuck, and the map then
+  // draws nothing until it is touched), a far place without gliding there
+  // across the state. Only a short move at the same zoom still glides.
+  function jumpTo(centre, zoom) {
+    const short = zoom === map.getZoom() && map.getBounds().contains(centre);
+    map.setView(centre, zoom, { animate: short });
+  }
+
+  function showAt(at, zoom) {
+    const { top, bottom } = covered();
+    if (!top && !bottom) { jumpTo(at, zoom); return; }   // nothing covers the map (wide screens)
+    const size = map.getSize();
+    const freeMiddle = (top + (size.y - bottom)) / 2;
+    const centre = map.project(at, zoom).add([0, size.y / 2 - freeMiddle]);
+    jumpTo(map.unproject(centre, zoom), zoom);
+  }
+
+  // is this place in the free part of the map, with a little room around it?
+  function inSight(at) {
+    const { top, bottom } = covered();
+    const point = map.latLngToContainerPoint(at);
+    const size = map.getSize();
+    return point.x > 20 && point.x < size.x - 20 && point.y > top + 20 && point.y < size.y - bottom - 20;
+  }
+
+  // touching the map (a tap on an empty spot, or dragging it) means the user
+  // wants the map: on a phone the sheet goes down (sheet.js), and a second tap
+  // closes an open departure (departures.js); dragging only looks around
+  const touched = kind => document.dispatchEvent(new CustomEvent('map-touched', { detail: { kind } }));
+  map.on('click', () => touched('tap'));
+  map.on('dragstart', () => touched('drag'));
+
+  function dotRadius(stop) {
+    return Math.max(SMALLEST_DOT_PX, 5 + Math.min(stop.lines, 30) / 6);   // more lines = bigger, up to 10 px
+  }
+
+  // the selected stop: a soft glow in its own colour around its dot (whose
+  // edge drawStops makes thicker)
+  function drawGlow(at, stop) {
     selectedLayer.clearLayers();
-    L.circleMarker([lat, lon], {
-      radius: 14, color: '#222', weight: 3, fill: false, interactive: false,
+    L.circleMarker(at, {
+      pane: 'glow', radius: dotRadius(stop) + 13, color: colourOf(stop), weight: 1.5, opacity: 0.55,
+      fillColor: colourOf(stop), fillOpacity: 0.28, interactive: false,
     }).addTo(selectedLayer);
   }
 
@@ -88,25 +178,31 @@
     return positions;
   }
 
+  let lastStops = [];   // the stops drawn now, to draw them again when the selection changes
+
   function drawStops(stops) {
+    lastStops = stops;
     stopsLayer.clearLayers();
     const positions = markerPositions(stops);
     // least important first, so the important markers end up on top
     stops.slice().reverse().forEach(stop => {
+      const selected = stop.id === selectedId;
       const marker = L.circleMarker(positions.get(stop.id), {
-        radius: 5 + Math.min(stop.lines, 30) / 6,   // more lines = bigger, 5 to 10 px
+        renderer: dotRenderer,
+        radius: dotRadius(stop) + (selected ? 2 : 0),
         color: 'white',
-        weight: 1.5,
+        weight: selected ? 3 : 1.5,
         fillColor: colourOf(stop),
         fillOpacity: 0.9,
+        bubblingMouseEvents: false,   // a tap on a stop is not a tap on the empty map
       });
       marker.stopId = stop.id;
       marker.bindTooltip(stop.name, { direction: 'top' });
       marker.on('click', () => selectStop(stop.id, stop.name, 'map'));
       stopsLayer.addLayer(marker);
       // the timetable service and the stop database place a station a few
-      // metres apart; keep the ring exactly on the marker
-      if (stop.id === selectedId) drawRing(marker.getLatLng().lat, marker.getLatLng().lng);
+      // metres apart; keep the glow exactly on the marker
+      if (selected) drawGlow(marker.getLatLng(), stop);
     });
   }
 
@@ -160,9 +256,9 @@
     platformMark = { id: platform.id, code: platform.code, lat: platform.lat, lon: platform.lon };
 
     // go there only if it can't be seen as it is: too far out to tell the
-    // platforms apart, or outside the picture
-    if (map.getZoom() < PLATFORM_ZOOM) map.setView(at, PLATFORM_ZOOM);
-    else if (!map.getBounds().pad(-0.1).contains(at)) map.panTo(at);
+    // platforms apart, or outside the free part of the picture
+    if (map.getZoom() < PLATFORM_ZOOM) showAt(at, PLATFORM_ZOOM);
+    else if (!inSight(at)) showAt(at, map.getZoom());
   });
 
   // departures.js announces the stop it is showing
@@ -170,14 +266,24 @@
     const { stop, source } = e.detail;
     selectedLayer.clearLayers();
     selectedId = stop.id;
+    drawStops(lastStops);   // the selected dot gets its thicker edge and its glow
     if (stop.lat === null || stop.lon === null) return;
     const shown = stopsLayer.getLayers().find(marker => marker.stopId === stop.id);
     const at = shown ? shown.getLatLng() : L.latLng(stop.lat, stop.lon);
-    drawRing(at.lat, at.lng);
-    // picked from the search or a link: go there. Picked on the map: stay put.
-    if (source !== 'map') {
-      map.setView([stop.lat, stop.lon], Math.max(map.getZoom(), STOP_ZOOM));
-    }
+    if (!shown) drawGlow(at, lastStops.find(s => s.id === stop.id) || { modes: [], lines: 0 });
+    // picked from the search or a link: go there. Picked on the map: stay
+    // put, unless the panel that came up now covers it (on a phone the
+    // sheet; on a wide screen the panel appearing beside the map)
+    if (source !== 'map') showAt(L.latLng(stop.lat, stop.lon), Math.max(map.getZoom(), STOP_ZOOM));
+    else if (window.sheet && window.sheet.insets()) { if (!inSight(at)) showAt(at, map.getZoom()); }
+    else if (!map.getBounds().contains(at)) map.panTo(at);
+  });
+
+  // the panel was closed (wide screens): no stop is selected any more
+  document.addEventListener('stop-cleared', () => {
+    selectedId = null;
+    selectedLayer.clearLayers();
+    drawStops(lastStops);
   });
 
   // the stop data's licence requires naming its source wherever it is shown
@@ -185,17 +291,25 @@
     try {
       const data = (await (await fetch(`${API}/`)).json()).stop_data;
       if (!data) return;
-      credits.appendChild(document.createTextNode('Stop data: '));
+      // in the settings: the stop data's source, as its licence asks
+      const line = el('p', '', 'Stops: ');
       const link = el('a', '', data.attribution);
       link.href = data.source;
       link.target = '_blank';
-      credits.appendChild(link);
+      line.appendChild(link);
       if (data.version) {
-        credits.appendChild(document.createTextNode(` (timetable of ${data.version.replace(/(\d{4})(\d\d)(\d\d)/, '$3.$2.$1')})`));
+        line.appendChild(document.createTextNode(`, timetable of ${data.version.replace(/(\d{4})(\d\d)(\d\d)/, '$3.$2.$1')}`));
       }
+      line.appendChild(document.createTextNode(' (licence '));
+      const licence = el('a', '', 'dl-de/by-2-0');
+      licence.href = 'https://www.govdata.de/dl-de/by-2-0';
+      licence.target = '_blank';
+      line.appendChild(licence);
+      line.appendChild(document.createTextNode(')'));
       if (data.expired) {
-        credits.appendChild(el('span', 'late', ' The timetable period of this data has ended; it should be imported again.'));
+        line.appendChild(el('span', 'late', ' The timetable period of this data has ended; it should be imported again.'));
       }
+      credits.prepend(line);
     } catch { /* the credit line is not worth an error message */ }
   }
 

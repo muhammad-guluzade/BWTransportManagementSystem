@@ -49,4 +49,11 @@ def index():
 
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    import sys
+    if "--phone" in sys.argv:
+        # reachable from other devices on the home network (a phone on the same
+        # Wi-Fi): http://<this computer's address>:5000. Without the debugger,
+        # whose error pages can run code and must never be reachable from outside.
+        app.run(host="0.0.0.0", port=5000)
+    else:
+        app.run(debug=True, port=5000)

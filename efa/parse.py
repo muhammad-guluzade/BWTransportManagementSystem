@@ -232,6 +232,22 @@ def is_replacement(transportation: dict) -> bool:
             or bool(re.match(r"SEV\b", line_name(transportation), re.IGNORECASE)))
 
 
+def brand(transportation: dict) -> str | None:
+    """'ice' for an ICE, 'flix' for FlixTrain and Flixbus, otherwise None:
+    for clients that colour these apart. FlixTrain comes from two
+    timetables: as "FlixTrain (Sondertarif)" by operator "FlixTrain-de", and
+    as train type FLX by operator "FlixTrain"; Flixbus as "Flixbus
+    (Sondertarif)" by "FlixBus-de"."""
+    product = (transportation.get("product") or {}).get("name") or ""
+    operator = (transportation.get("operator") or {}).get("name") or ""
+    train_type = (transportation.get("properties") or {}).get("trainType") or ""
+    if "flix" in product.lower() or "flix" in operator.lower() or train_type == "FLX":
+        return "flix"
+    if train_type == "ICE" or product == "ICE":
+        return "ice"
+    return None
+
+
 # --- departures: places ----------------------------------------------------
 
 def platform_code(location: dict) -> str | None:
@@ -578,6 +594,7 @@ def parse_departure(event: dict, now: datetime | None = None, importance: dict |
         "via": [stop for stop in via_stops(event, importance) if stop != destination],
         "dticket": dticket_valid(transportation) is True,
         "replacement": is_replacement(transportation),
+        "brand": brand(transportation),
         "time": iso(actual),
         "planned": iso(planned),
         "minutes": max(0, round((actual - now).total_seconds() / 60)) if actual else None,

@@ -37,9 +37,11 @@ class EfaError(Exception):
     """EFA could not be reached or returned something that isn't JSON."""
 
 
-def efa_get(endpoint: str, params: dict, ttl: int = 0) -> dict:
+def efa_get(endpoint: str, params: dict, ttl: int = 0, keep=None) -> dict:
     """Call an EFA endpoint and return parsed JSON, reusing a cached
-    response if one younger than `ttl` seconds exists."""
+    response if one younger than `ttl` seconds exists. `keep(data)` can say
+    that an answer is not worth remembering: it is returned, but the next
+    call asks EFA again."""
     key = (endpoint, tuple(sorted(params.items())))
     now = time.monotonic()
 
@@ -57,7 +59,7 @@ def efa_get(endpoint: str, params: dict, ttl: int = 0) -> dict:
     except (requests.RequestException, ValueError) as e:
         raise EfaError(str(e)) from e
 
-    if ttl:
+    if ttl and (keep is None or keep(data)):
         with _cache_lock:
             if len(_cache) >= _CACHE_MAX_ENTRIES:
                 for k in [k for k, (expires, _) in _cache.items() if expires <= now]:
@@ -103,7 +105,17 @@ def get_station(stop_id: str) -> dict:
             "coordOutputFormat": "WGS84[dd.ddddd]",
         },
         ttl=STATION_TTL,
+        # Remembered for hours, so only if it really is this station: when EFA
+        # has trouble it can answer with some other stop (seen on 16 October
+        # 2026), and that must not hide the station for the next six hours.
+        keep=lambda data: describes(data, stop_id),
     )
+
+
+def describes(data: dict, stop_id: str) -> bool:
+    """Is this answer about the station `stop_id`?"""
+    locations = data.get("locations") if isinstance(data, dict) else None
+    return bool(locations) and isinstance(locations[0], dict) and locations[0].get("id") == stop_id
 
 
 def get_departures(stop_id: str, classes=(), limit: int = 100, with_stops: bool = True, ttl: int = DEPARTURES_TTL,

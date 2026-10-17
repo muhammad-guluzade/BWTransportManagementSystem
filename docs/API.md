@@ -262,6 +262,7 @@ type (tab), grouped by mode, then by platform.
 | `stop_id` | required | A stop `id` from the search. |
 | `tab` | optional | A tab `id` from `tabs`. Missing or unknown: the first tab. |
 | `platform` | optional | A platform `id` of this stop (from a board, or from the stops-in-an-area endpoint): only that platform's departures, see "One platform" below. `tab` is ignored then. |
+| `trains` | optional | `together`: regional and long-distance trains are one mode, `trains` ("Trains"), so a platform lists its ICEs among its regional trains, in time order. Without it they are two modes, as described below. Nothing else changes (S-Bahn, buses and the rest keep their own modes). |
 
 A station shows only its own departures. Stations right next to it (e.g. the
 underground part of a main station, or the bus station in front of it) are
@@ -309,6 +310,7 @@ and one departure)
               "via": ["Bad Cannstatt", "Waiblingen"],
               "dticket": true,
               "replacement": false,
+              "brand": null,
               "time": "2026-10-01T22:38:00Z",
               "planned": "2026-10-01T22:34:00Z",
               "minutes": 63,
@@ -346,7 +348,7 @@ Tab ids: `trains`, `sbahn`, `tram`, `bus`, `ferry`, `cablecar`, `other`.
 
 | Field | |
 |---|---|
-| `id` | `u_bahn_tram`, `s_bahn`, `regional_train`, `long_distance_train`, `bus`, `long_distance_bus`, `ferry`, `cable_car`, `other`. |
+| `id` | `u_bahn_tram`, `s_bahn`, `regional_train`, `long_distance_train`, `bus`, `long_distance_bus`, `ferry`, `cable_car`, `other`; with `trains=together`, `trains` in place of `regional_train` and `long_distance_train`. |
 | `name` | Display text, e.g. `"Regional train"`. |
 | `flat` | `true` if the mode has fewer than two platforms here; a client may then leave out the platform heading. |
 | `platforms` | In display order: numbered, then lettered, unknown last. |
@@ -373,6 +375,7 @@ Tab ids: `trains`, `sbahn`, `tram`, `bus`, `ferry`, `cablecar`, `other`.
 | `via` | Up to two major stops on the way to `destination`, in travel order: names from the departure's stop list (next endpoint), never from beyond the destination. Empty if the destination is the next stop. |
 | `dticket` | `true` if the Deutschlandticket is valid. `false` means not valid or not known. |
 | `replacement` | `true` for a bus that runs in place of a train (rail replacement service, "SEV"). The timetable service lists some of these among the trains, at the bus station they leave from; a client should say that it is a bus. |
+| `brand` | `"ice"` for an ICE, `"flix"` for FlixTrain and Flixbus, otherwise `null`. For clients that show these apart (colours, icons). |
 | `time` | Expected departure: the live time if there is one, else the planned time. Can be days ahead when `next_service` is set; show the date then. A client shows `planned` and `time` for late departures; `delay` is there for convenience. |
 | `planned` | Planned departure. |
 | `minutes` | Minutes from now until `time`, never negative. |

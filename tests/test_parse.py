@@ -105,6 +105,35 @@ class LineNameTest(unittest.TestCase):
         self.assertEqual(parse.line_name({}), "?")
 
 
+class BrandTest(unittest.TestCase):
+    """ICE and Flix are told apart (the page colours them); seen in EFA's answers on 17 October 2026."""
+
+    def t(self, cls, product, operator=None, train_type=None):
+        transportation = {"product": {"class": cls, "name": product}}
+        if operator:
+            transportation["operator"] = {"name": operator}
+        if train_type:
+            transportation["properties"] = {"trainType": train_type}
+        return parse.brand(transportation)
+
+    def test_ice(self):
+        self.assertEqual(self.t(16, "Zug", "DB Fernverkehr AG", "ICE"), "ice")
+        self.assertEqual(self.t(16, "ICE", "DB Fernverkehr AG", "ICE"), "ice")
+        self.assertEqual(self.t(16, "ICE"), "ice")
+
+    def test_flix_trains_from_both_timetables_and_flixbus(self):
+        self.assertEqual(self.t(16, "FlixTrain (Sondertarif)", "FlixTrain-de"), "flix")
+        self.assertEqual(self.t(0, "Zug", "FlixTrain", "FLX"), "flix")
+        self.assertEqual(self.t(7, "Flixbus (Sondertarif)", "FlixBus-de"), "flix")
+
+    def test_everything_else_has_none(self):
+        for args in ((13, "R-Bahn", "DB AG", "NRE"), (15, "Zug", "DB Fernverkehr AG", "IC"), (15, "Zug", "DB Fernverkehr AG", "EC"),
+                     (16, "Zug", "SNCF", "TGD"), (0, "Zug", "Österreichische Bundesbahnen", "NJ"), (0, "Zug", "WESTbahn", "WB"),
+                     (6, "Bus", "SBG"), (17, "Ersatzverkehr", "DB Regio AG Baden-Württemberg", "SEV"), (None, "")):
+            self.assertIsNone(self.t(*args), args)
+        self.assertIsNone(parse.brand({}))
+
+
 class PlatformLabelTest(unittest.TestCase):
     def test_prefixes_are_normalised(self):
         cases = {
@@ -778,6 +807,19 @@ class SecondTimetableTest(unittest.TestCase):
         live = {**self.dep(realtime=True), "id": "C"}
         self.assertEqual(dedupe([first, live]), [live])
         self.assertEqual(dedupe([live, second]), [live])
+
+    def test_the_numberless_copy_of_a_numbered_train_goes(self):
+        # the French timetable's Paris trains: no number ("Zug"), another platform
+        from services.departures import dedupe
+        ice = self.dep(line="ICE 9578", platform="4", destination="Paris Est", mode="Long-distance train")
+        copy = self.dep(line="Zug", platform="10", destination="Paris Est", mode="Regional train")
+        self.assertEqual(dedupe([copy, ice]), [ice])
+        # a train whose label has no number, without a numbered twin, stays ("SAB" to Gammertingen)
+        sab = self.dep(line="SAB", platform="5a", destination="Gammertingen Bahnhof", mode="Regional train")
+        self.assertEqual(dedupe([sab, ice]), [sab, ice])
+        # ... and so does a numberless one to another place or at another time
+        other_time = {**copy, "planned": "2026-10-17T05:00:00Z"}
+        self.assertEqual(dedupe([other_time, ice]), [other_time, ice])
 
     def test_what_is_not_a_copy_stays(self):
         from services.departures import dedupe

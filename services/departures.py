@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 MODE_ORDER = [
     "U-Bahn / Tram",
     "S-Bahn",
+    "Trains",
     "Regional train",
     "Long-distance train",
     "Bus",
@@ -27,6 +28,20 @@ MODE_ORDER = [
     "Ferry",
     "Cable car",
 ]
+
+# On request (`trains_together`) regional and long-distance trains are one
+# mode: at a big station an ICE then stands among the regional trains of its
+# platform instead of in a list of its own further down.
+TRAINS = "Trains"
+TRAIN_MODES = {"Regional train", "Long-distance train"}
+
+
+def put_trains_together(departures: list) -> list:
+    for dep in departures:
+        if dep["mode"] in TRAIN_MODES:
+            dep["mode"] = TRAINS
+    return departures
+
 
 # why a board has no departures
 EMPTY_NEARBY = "nearby"          # nothing here, but linked stations have service
@@ -163,7 +178,15 @@ def dedupe(departures: list) -> list:
     def trip(dep):
         return dep["mode"], dep["line"], dep["destination"], dep["planned"]
     with_platform = {trip(dep) for dep in kept.values() if dep.get("platform_code")}
-    return [dep for dep in kept.values() if dep.get("platform_code") or trip(dep) not in with_platform]
+    kept = [dep for dep in kept.values() if dep.get("platform_code") or trip(dep) not in with_platform]
+    # The French timetable has the Paris trains too, without a number (shown
+    # as "Zug") and sometimes at another platform (Stuttgart Hbf: 10 instead
+    # of 4). A numberless train is that copy when a numbered one leaves for
+    # the same destination at the same time; then only the numbered one stays.
+    # (A train whose label simply has no number, like "SAB", has no such twin.)
+    numbered = {(dep["destination"], dep["planned"]) for dep in kept if dep["mode"] in TRAIN_MODES and re.search(r"\d", dep["line"])}
+    return [dep for dep in kept if not (dep["mode"] in TRAIN_MODES and not re.search(r"\d", dep["line"])
+                                        and (dep["destination"], dep["planned"]) in numbered)]
 
 
 # two platform positions this close are one place to stand
@@ -400,7 +423,7 @@ def known_platform(platform_id: str) -> dict:
         return {}
 
 
-def platform_board(station: dict, nearby: list, platform_id: str) -> dict:
+def platform_board(station: dict, nearby: list, platform_id: str, trains_together: bool = False) -> dict:
     """The board of ONE platform of a station: the same shape as `board`,
     with `platform` saying which. EFA answers for a platform id with that
     platform's departures alone, so a quiet bay of a big bus station gets its
@@ -413,6 +436,8 @@ def platform_board(station: dict, nearby: list, platform_id: str) -> dict:
               if isinstance(event, dict) and (event.get("location") or {}).get("id") == platform_id]
     tab = next((parse.tab_of(event.get("transportation") or {}) for event in events if not parse.is_excluded(event)), None)
     departures = dedupe(parse_events(events))
+    if trains_together:
+        put_trains_together(departures)
     heading = towards(departures)
     modes = group_departures(departures)
     shown = modes[0]["platforms"][0] if modes else known_platform(platform_id)
@@ -436,7 +461,7 @@ def platform_board(station: dict, nearby: list, platform_id: str) -> dict:
     }
 
 
-def board(stop_id: str, tab_id: str = "", platform_id: str = "") -> dict:
+def board(stop_id: str, tab_id: str = "", platform_id: str = "", trains_together: bool = False) -> dict:
     """The departure board for one station and tab:
     {stop: {id, name, lat, lon}, nearby: [{id, name, lat, lon}],
      tabs: [{id, name}], tab, modes: [...],
@@ -446,7 +471,8 @@ def board(stop_id: str, tab_id: str = "", platform_id: str = "") -> dict:
     `next_service` is set when nothing departs in the next 24 hours and the
     departures shown are the next ones after that; it is their (local) date.
     With `platform_id` the board holds that platform's departures only, see
-    `platform_board`."""
+    `platform_board`. With `trains_together` regional and long-distance
+    trains are one mode, "Trains"."""
     station = parse.parse_station(client.get_station(stop_id))
     # EFA resolves an id it doesn't know, or any text, to whatever stop
     # matches loosely, anywhere in Europe ("Stuttgart Hbf", even ".."): only
@@ -455,7 +481,7 @@ def board(stop_id: str, tab_id: str = "", platform_id: str = "") -> dict:
         raise UnknownStop(stop_id)
     nearby = [n for n in station["nearby"] if parse.in_baden_wuerttemberg(n["id"])]
     if platform_id:
-        return platform_board(station, nearby, platform_id)
+        return platform_board(station, nearby, platform_id, trains_together)
 
     tabs, tab, departures = load_tab(station, tab_id)
     departures = dedupe(departures)
@@ -479,6 +505,8 @@ def board(stop_id: str, tab_id: str = "", platform_id: str = "") -> dict:
         nearby = nearby_with_service(nearby)
     else:
         nearby = [public_stop(n) for n in nearby]
+    if trains_together:
+        put_trains_together(departures)
 
     return {
         "stop": public_stop(station),

@@ -98,6 +98,70 @@ class ApiTestCase(unittest.TestCase):
         client.get_station, client.get_departures, client.find_stops = self.originals
 
 
+class StationCacheTest(unittest.TestCase):
+    """A station's description is remembered for hours, so only if it is the
+    station asked for (16 October 2026: EFA, in trouble, answered with other stops)."""
+
+    def setUp(self):
+        self.real_get = client._session.get
+        client._cache.clear()
+        self.answers = []
+        self.asked = 0
+
+        class Answer:
+            def __init__(self, data):
+                self.data = data
+                self.encoding = None
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self.data
+
+        def fake_get(url, params=None, timeout=None):
+            self.asked += 1
+            return Answer(self.answers.pop(0))
+        client._session.get = fake_get
+
+    def tearDown(self):
+        client._session.get = self.real_get
+        client._cache.clear()
+
+    def test_a_wrong_station_is_not_remembered(self):
+        wrong = {"locations": [{"id": "de:08125:921", "name": "Untergruppenbach, MAGNA", "type": "stop"}]}
+        right = {"locations": [{"id": STOP, "name": "Stuttgart, Hauptbahnhof", "type": "stop"}]}
+        self.answers = [wrong, right]
+        self.assertEqual(client.get_station(STOP), wrong)     # returned (the board then says: unknown stop) ...
+        self.assertEqual(client.get_station(STOP), right)     # ... but not remembered: EFA is asked again
+        self.assertEqual(client.get_station(STOP), right)     # the right one is remembered
+        self.assertEqual(self.asked, 2)
+
+
+class TrainsTogetherTest(ApiTestCase):
+    """?trains=together: a platform's ICEs among its regional trains (the page asks for it)."""
+
+    def setUp(self):
+        super().setUp()
+        ice = {**EVENT, "departureTimePlanned": "2026-10-01T07:55:00Z", "departureTimeEstimated": "2026-10-01T07:55:00Z",
+               "transportation": {**EVENT["transportation"], "id": "ddb:ICE512: :H:j26", "disassembledName": "ICE 512",
+                                  "product": {"class": 16, "name": "ICE"}, "properties": {"tripCode": 512}}}
+        self.events = [EVENT, ice]
+
+    def modes(self, query=""):
+        body = self.http.get(f"/api/v1/stops/{STOP}/departures{query}").get_json()
+        return [(m["id"], m["name"], [(p["name"], [d["line"] for d in p["departures"]]) for p in m["platforms"]]) for m in body["modes"]]
+
+    def test_two_modes_unless_asked(self):
+        self.assertEqual(self.modes(), [("regional_train", "Regional train", [("Platform 3", ["RE5"])]),
+                                        ("long_distance_train", "Long-distance train", [("Platform 3", ["ICE 512"])])])
+
+    def test_together_one_platform_in_time_order(self):
+        self.assertEqual(self.modes("?trains=together"), [("trains", "Trains", [("Platform 3", ["ICE 512", "RE5"])])])
+        self.assertEqual(self.modes("?trains=Together"), self.modes("?trains=together"))
+        self.assertEqual(self.modes("?trains=apart"), self.modes())
+
+
 class IndexTest(ApiTestCase):
     def test_index_lists_the_endpoints(self):
         body = self.http.get("/api/v1/").get_json()
@@ -158,7 +222,7 @@ class DeparturesTest(ApiTestCase):
         self.assertEqual(platform["towards"], ["Plochingen"])
 
         departure = platform["departures"][0]
-        self.assertEqual(list(departure), ["id", "line", "destination", "via", "dticket", "replacement", "time", "planned",
+        self.assertEqual(list(departure), ["id", "line", "destination", "via", "dticket", "replacement", "brand", "time", "planned",
                                            "minutes", "delay", "realtime", "cancelled"])
         minutes = departure.pop("minutes")  # depends on the clock
         self.assertIsInstance(minutes, int)
@@ -170,6 +234,7 @@ class DeparturesTest(ApiTestCase):
             "via": ["Plochingen", "Göppingen"],
             "dticket": True,
             "replacement": False,
+            "brand": None,
             "time": "2026-10-01T08:04:00Z",
             "planned": "2026-10-01T08:00:00Z",
             "delay": 4,
@@ -535,10 +600,11 @@ class ErrorTest(ApiTestCase):
 
     def test_main_page_has_map_and_panel(self):
         page = self.http.get("/").get_data(as_text=True)
-        for part in ('id="map"', 'id="panel"', 'id="stop-input"', 'id="credits"', "js/departures.js", "js/map.js"):
+        for part in ('id="map"', 'id="panel"', 'id="stop-input"', 'id="credits"', "js/departures.js", "js/sheet.js", "js/map.js",
+                     'name="viewport"'):
             self.assertIn(part, page)
         # the scripts and the stylesheet the page asks for exist
-        for asset in ("/static/js/departures.js", "/static/js/map.js", "/static/css/style.css"):
+        for asset in ("/static/js/departures.js", "/static/js/sheet.js", "/static/js/map.js", "/static/css/style.css"):
             with self.http.get(asset) as res:
                 self.assertEqual(res.status_code, 200, asset)
 

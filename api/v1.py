@@ -86,7 +86,8 @@ def search_stops():
 
 @bp.route("/stops/<stop_id>/departures")
 def stop_departures(stop_id):
-    return jsonify(departures.board(stop_id.strip(), request.args.get("tab", ""), request.args.get("platform", "").strip()))
+    return jsonify(departures.board(stop_id.strip(), request.args.get("tab", ""), request.args.get("platform", "").strip(),
+                                    trains_together=request.args.get("trains", "").strip().lower() == "together"))
 
 
 @bp.route("/stops/<stop_id>/departures/<departure_id>/stops")
