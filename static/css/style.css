@@ -264,9 +264,15 @@ tr.stop.cancelled .stop-name, tr.stop.cancelled .stop-name a { text-decoration: 
   /* the grip: a wide, tall strip to grab, with the bar drawn in its middle */
   #sheet-grip { display: block; width: 100%; height: 30px; margin: 0; padding: 0; border: none; background: none; cursor: grab; touch-action: none; }
   #sheet-grip::before { content: ''; display: block; width: 48px; height: 5px; margin: 11px auto 0; border-radius: 3px; background: var(--grip); }
+  /* An open sheet is pulled down by its top strip, also with the list scrolled: a taller
+     grip, and the whole strip (grip, name, status) never scrolls the list, so the phone
+     can't start scrolling before the sheet moves. (The tabs scroll by themselves, so
+     browsers leave them as they were.) The small bar at the bottom keeps its height. */
+  body.sheet-half #sheet-grip, body.sheet-full #sheet-grip { height: 40px; }
+  body:not(.layout-screens) #panel-head { touch-action: none; }
   .station-name { padding-right: 72px; }
   /* at full height the strip has a button back to the map */
-  body.sheet-full:not(.layout-screens) #sheet-map { display: block; position: absolute; top: 32px; right: 12px; padding: 6px 14px; border: none;
+  body.sheet-full:not(.layout-screens) #sheet-map { display: block; position: absolute; top: 42px; right: 12px; padding: 6px 14px; border: none;
     border-radius: 16px; background: var(--accent); color: var(--card); font-size: 0.85rem; font-weight: 600; cursor: pointer; }
 
   /* "Two screens": a bar at the bottom switches between map and departures; nothing is dragged */
