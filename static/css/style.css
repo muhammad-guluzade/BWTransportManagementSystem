@@ -9,7 +9,7 @@
 
 :root {
   --bg: #f4f5f7; --card: #fff; --text: #1d2228; --muted: #6b7280; --faint: #8f97a3; --line: #e3e6ea;
-  --accent: #0b5cad; --accent-soft: #e8f0fa; --late: #c1121c;
+  --accent: #0b5cad; --accent-soft: #e8f0fa; --late: #c1121c; --star: #d99100;
   --warn-bg: #fffaeb; --warn-line: #ecd9a0; --shade: rgba(16, 24, 40, 0.16); --grip: #d3d8de;
   /* transport types: the map's markers, line badges and section headings */
   --rail: #c1121c; --rail-light: #d63c3c; --flix: #73d700; --sbahn: #2e8b47; --ubahn: #005aa9; --tram: #e07b00; --bus: #a1338f; --other: #5b6470;
@@ -19,14 +19,14 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #14181d; --card: #1d232a; --text: #e6e9ee; --muted: #a3abb6; --faint: #7d8693; --line: #2d343d;
-    --accent: #72aaee; --accent-soft: #1c2a3b; --late: #ff6b6b;
+    --accent: #72aaee; --accent-soft: #1c2a3b; --late: #ff6b6b; --star: #f2c14e;
     --warn-bg: #2a2416; --warn-line: #5f4d22; --shade: rgba(0, 0, 0, 0.5); --grip: #4a525d;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
     --bg: #14181d; --card: #1d232a; --text: #e6e9ee; --muted: #a3abb6; --faint: #7d8693; --line: #2d343d;
-    --accent: #72aaee; --accent-soft: #1c2a3b; --late: #ff6b6b;
+    --accent: #72aaee; --accent-soft: #1c2a3b; --late: #ff6b6b; --star: #f2c14e;
     --warn-bg: #2a2416; --warn-line: #5f4d22; --shade: rgba(0, 0, 0, 0.5); --grip: #4a525d;
     color-scheme: dark;
 }
@@ -64,6 +64,27 @@ button { font: inherit; color: inherit; }
 #results .result.active { box-shadow: inset 3px 0 0 var(--accent); }
 #results .result-types { flex-shrink: 0; color: var(--faint); font-size: 0.8rem; }
 #results .no-result { color: var(--muted); font-size: 0.9rem; }
+/* while nothing is typed: the stops opened last */
+#results .results-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px 4px;
+  font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+/* "Clear all" by the heading */
+.clear-recent { padding: 2px 6px; border: none; background: none; color: var(--accent); font-size: 0.75rem; font-weight: 600;
+  letter-spacing: 0; text-transform: none; cursor: pointer; }
+#results .results-head + .result { border-top: none; }
+#results .result.mine { align-items: center; padding-top: 6px; padding-bottom: 6px; }
+.forget { flex-shrink: 0; width: 32px; height: 32px; padding: 0; border: none; border-radius: 50%; background: none; color: var(--faint); cursor: pointer; }
+.forget::before { content: '\2715'; font-size: 14px; }
+.forget:hover { color: var(--text); background: var(--accent-soft); }
+
+/* the star that saves a favourite: drawn here, so names and headings keep their text */
+.fav-star { flex-shrink: 0; width: 32px; height: 32px; padding: 0; border: none; border-radius: 50%; background: none;
+  color: var(--faint); font-size: 21px; line-height: 32px; text-align: center; cursor: pointer; vertical-align: middle; }
+.fav-star::before { content: '\2606'; }
+.fav-star.on { color: var(--star); }
+.fav-star.on::before { content: '\2605'; }
+.fav-star:hover { background: var(--accent-soft); }
+.station-name .fav-star { margin: -4px 0 -4px 2px; }
+.platform-title .fav-star { margin: -6px 0 -6px auto; font-weight: 400; }
 
 /* ---------- map ---------- */
 #map-area { position: relative; min-width: 0; }
@@ -71,24 +92,45 @@ button { font: inherit; color: inherit; }
 #map-note { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 1000; max-width: 80%; padding: 8px 14px;
   border: 1px solid var(--warn-line); border-radius: 10px; background: var(--warn-bg); font-size: 0.88rem; }
 /* the menu (menu.js): what the colours mean, and the theme */
-#menu-toggle { position: absolute; z-index: 1000; top: 12px; right: 12px; width: 38px; height: 38px; padding: 0; border: none; border-radius: 50%;
+#menu-toggle, #favourites-toggle { position: absolute; z-index: 1000; top: 12px; right: 12px; width: 38px; height: 38px; padding: 0; border: none; border-radius: 50%;
   background: var(--card); color: var(--muted); box-shadow: 0 1px 4px var(--shade); font-size: 20px; line-height: 38px; cursor: pointer; }
 #menu-toggle:hover { color: var(--accent); }
+/* the favourites (favourites.js): a star button beside it */
+#favourites-toggle { right: 58px; color: var(--star); font-size: 19px; }
+#favourites-toggle:hover { background: var(--accent-soft); }
 
 /* settings (menu.js): a window over the blurred page */
-#settings { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; padding: 16px;
+#settings, #favourites { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; padding: 16px;
   padding-top: calc(16px + env(safe-area-inset-top, 0px)); padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   background: rgba(10, 14, 20, 0.28); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
-#settings[hidden] { display: none; }
+#settings[hidden], #favourites[hidden] { display: none; }
 .settings-card { width: min(380px, 100%); max-height: 100%; overflow-y: auto; display: grid; gap: 18px; padding: 16px 18px 20px;
   border-radius: 18px; background: var(--card); box-shadow: 0 12px 40px var(--shade); }
 .settings-top { display: flex; align-items: center; justify-content: space-between; }
 .settings-top h2 { margin: 0; font-size: 1.15rem; }
-#settings-close { width: 36px; height: 36px; padding: 0; border: none; border-radius: 50%; background: var(--accent-soft); color: var(--muted);
+#settings-close, #favourites-close { width: 36px; height: 36px; padding: 0; border: none; border-radius: 50%; background: var(--accent-soft); color: var(--muted);
   font-size: 18px; line-height: 36px; cursor: pointer; }
-#settings-close:hover { color: var(--text); }
+#settings-close:hover, #favourites-close:hover { color: var(--text); }
 /* the ring only for keyboard users, not after a tap or click */
-#settings-close:focus:not(:focus-visible) { outline: none; }
+#settings-close:focus:not(:focus-visible), #favourites-close:focus:not(:focus-visible) { outline: none; }
+/* the favourites' list: a tap on a row opens it; its star takes it out (Undo until closed) */
+.favourites-card { gap: 12px; }
+#favourites-filter { width: 100%; box-sizing: border-box; padding: 9px 14px; font-size: 16px; border: 1px solid var(--line); border-radius: 20px;
+  background: var(--bg); color: var(--text); outline: none; }
+#favourites-filter:focus { border-color: var(--accent); }
+#favourites-list { display: grid; margin: 0 -18px; }
+.fav-row { position: relative; display: flex; align-items: center; gap: 10px; padding: 10px 18px; border-top: 1px solid var(--line); }
+.fav-row:first-child { border-top: none; }
+.fav-open { position: absolute; inset: 0; width: 100%; padding: 0; border: none; background: none; cursor: pointer; }
+.fav-open:hover { background: var(--accent-soft); }
+.fav-text { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; pointer-events: none; }
+.fav-name { overflow: hidden; text-overflow: ellipsis; }
+.fav-detail { color: var(--faint); font-size: 0.8rem; }
+.fav-row .fav-star { position: relative; }
+.fav-row.removed .fav-text { opacity: 0.55; }
+.fav-undo { flex-shrink: 0; padding: 4px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--accent);
+  font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+.fav-empty { margin: 4px 18px; color: var(--muted); font-size: 0.9rem; }
 #settings section { display: grid; gap: 8px; }
 @media (min-width: 1024px) { #settings .phone-only { display: none; } }
 #settings h3 { margin: 0; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
@@ -154,6 +196,11 @@ button { font: inherit; color: inherit; }
 .platform-title::after { content: 'Show on map'; flex-shrink: 0; font-weight: 500; font-size: 0.75rem; color: var(--accent); padding: 3px 10px;
   border-radius: 12px; background: var(--accent-soft); }
 .platform-title.marked { background: var(--accent-soft); }
+/* a favourite platform opened: only it is shown */
+.only-platform { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; margin-top: 12px;
+  padding: 8px 14px; border-radius: 12px; background: var(--accent-soft); font-size: 0.9rem; }
+.only-platform .show-all { padding: 4px 12px; border: none; border-radius: 14px; background: var(--accent); color: var(--card);
+  font-size: 0.85rem; font-weight: 600; cursor: pointer; }
 .platform-title.marked::after { content: 'On the map \2715'; background: var(--accent); color: var(--card); }
 
 /* one departure: line | destination, labels, via | wait and clock time */
@@ -242,7 +289,7 @@ tr.stop.cancelled .stop-name, tr.stop.cancelled .stop-name a { text-decoration: 
   #search-box { max-width: none; pointer-events: auto; }
   #map-area { position: fixed; inset: 0; }
   .leaflet-control-zoom { display: none; }
-  #menu-toggle { top: calc(66px + env(safe-area-inset-top, 0px)); }
+  #menu-toggle, #favourites-toggle { top: calc(66px + env(safe-area-inset-top, 0px)); }
   #map-note { top: calc(66px + env(safe-area-inset-top, 0px)); max-width: calc(100% - 120px); left: 12px; transform: none; }
 
   /* the sheet: fixed below the search box; sheet.js moves it with --sheet-y */

@@ -640,9 +640,11 @@ class PageTest(unittest.TestCase):
 
     def test_page_files_carry_their_version(self):
         page = self.http.get("/").get_data(as_text=True)
-        for name in ("css/style.css", "js/menu.js", "js/departures.js", "js/sheet.js", "js/map.js", "js/address.js"):
+        for name in ("css/style.css", "js/menu.js", "js/mine.js", "js/departures.js", "js/favourites.js", "js/sheet.js", "js/map.js", "js/address.js"):
             self.assertRegex(page, rf'/static/{name}\?v=\d+"', name)
         self.assertLess(page.index("js/map.js"), page.index("js/address.js"))   # address.js opens the stop: last
+        self.assertLess(page.index("js/mine.js"), page.index("js/departures.js"))   # the board uses the favourites
+        self.assertLess(page.index("js/departures.js"), page.index("js/favourites.js"))   # the window opens through the board
 
     def test_versioned_files_are_kept_long(self):
         page = self.http.get("/").get_data(as_text=True)

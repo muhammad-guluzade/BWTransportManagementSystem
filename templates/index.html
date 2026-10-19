@@ -33,6 +33,7 @@
   <section id="map-area">
     <div id="map"></div>
     <div id="map-note" hidden></div>
+    <button type="button" id="favourites-toggle" aria-controls="favourites" aria-expanded="false" aria-label="Favourites" title="Favourites">&#x2605;</button>
     <button type="button" id="menu-toggle" aria-controls="settings" aria-expanded="false" aria-label="Settings">&#x22EF;</button>
   </section>
 
@@ -55,6 +56,18 @@
   <button type="button" data-screen="map">Map</button>
   <button type="button" data-screen="list">Departures</button>
 </nav>
+
+<!-- favourites (favourites.js): like the settings, over a blurred page -->
+<div id="favourites" role="dialog" aria-modal="true" aria-labelledby="favourites-title" hidden>
+  <div class="settings-card favourites-card">
+    <div class="settings-top">
+      <h2 id="favourites-title">Favourites</h2>
+      <button type="button" id="favourites-close" aria-label="Close the favourites">&#x2715;</button>
+    </div>
+    <input type="search" id="favourites-filter" placeholder="Search your favourites" autocomplete="off" aria-label="Search your favourites" hidden>
+    <div id="favourites-list" role="list"></div>
+  </div>
+</div>
 
 <!-- settings (menu.js): over a blurred page, closed with the x or Escape -->
 <div id="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
@@ -103,7 +116,9 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="{{ url_for('static', filename='js/menu.js') }}"></script>
+<script src="{{ url_for('static', filename='js/mine.js') }}"></script>
 <script src="{{ url_for('static', filename='js/departures.js') }}"></script>
+<script src="{{ url_for('static', filename='js/favourites.js') }}"></script>
 <script src="{{ url_for('static', filename='js/sheet.js') }}"></script>
 <script src="{{ url_for('static', filename='js/map.js') }}"></script>
 <script src="{{ url_for('static', filename='js/address.js') }}"></script>

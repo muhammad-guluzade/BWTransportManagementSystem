@@ -46,6 +46,11 @@ let openPlatform = null;       // the platform it leaves from, see platformKey()
 let markedPlatform = null;     // its key, see platformKey()
 let markShown = false;         // it was found while drawing the board
 
+// A favourite platform was opened (mine.js): only that platform is shown,
+// until "Show all platforms", another tab or another stop.
+let onlyPlatform = null;       // the favourite, or null
+let markOnlyPlatform = false;  // its platform still has to be marked on the map (first load)
+
 // departure times arrive in UTC; show them in local German time
 const timeFormat = new Intl.DateTimeFormat('de-DE', {
   hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin',
@@ -83,6 +88,7 @@ input.addEventListener('focus', () => {
     input.value = '';
     showClear();
   }
+  if (input.value.trim() === '') showMine();
 });
 input.addEventListener('blur', () => {
   if (pickedName && input.value.trim() === '') input.value = pickedName;
@@ -96,6 +102,7 @@ clearButton.addEventListener('click', () => {
   showClear();
   input.focus();
   input.placeholder = pickedName || PLACEHOLDER;
+  showMine();
 });
 
 // The results can be chosen from the keyboard: the arrow keys move a mark
@@ -117,13 +124,20 @@ function markResult(index) {
 }
 
 input.addEventListener('keydown', (e) => {
-  if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && shownStops.length) {
+  const rows = resultsBox.querySelectorAll('.result').length;
+  if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && rows) {
     e.preventDefault();   // the cursor stays where it is
     const step = e.key === 'ArrowDown' ? 1 : -1;
-    markResult(markedResult === -1 ? (step === 1 ? 0 : shownStops.length - 1) : (markedResult + step + shownStops.length) % shownStops.length);
+    markResult(markedResult === -1 ? (step === 1 ? 0 : rows - 1) : (markedResult + step + rows) % rows);
   } else if (e.key === 'Enter') {
     e.preventDefault();
     const typed = input.value.trim();
+    // the favourites and recent stops (nothing typed yet): the marked one
+    if (typed === '') {
+      const row = resultsBox.querySelectorAll('.result')[markedResult];
+      if (row) row.click();
+      return;
+    }
     if (typed.length < 2) return;
     if (shownFor === typed) {
       const stop = shownStops[markedResult >= 0 ? markedResult : 0];
@@ -148,7 +162,8 @@ input.addEventListener('input', () => {
   clearTimeout(debounceTimer);
   // a space at the end says the last word is finished, so it is kept
   const q = input.value.replace(/^\s+/, '');
-  if (q.trim().length < 2) { searchCounter++; showResults([]); return; }
+  // nothing typed: the favourites and recent stops; one letter: nothing yet
+  if (q.trim().length < 2) { searchCounter++; if (q.trim() === '') showMine(); else showResults([]); return; }
   debounceTimer = setTimeout(() => searchStops(q), 200);
 });
 
@@ -190,6 +205,7 @@ function mapPlace() {
 // the list under the search box; `nothingFor` is the text nothing was found for
 function showResults(stops, nothingFor = '') {
   resultsBox.innerHTML = '';
+  mineShown = false;
   shownStops = stops;
   shownFor = nothingFor;
   markedResult = -1;
@@ -215,6 +231,65 @@ function showResults(stops, nothingFor = '') {
   }
 }
 
+// While nothing is typed, the list under the search box shows the stops
+// opened last (mine.js); the favourites have their own window (favourites.js)
+let mineShown = false;
+
+function showMine() {
+  showResults([]);
+  const recent = window.mine.recent();
+  if (!recent.length) return;
+  mineShown = true;
+  input.setAttribute('aria-expanded', 'true');
+  const head = el('div', 'results-head');
+  head.appendChild(el('span', '', 'Recent'));
+  const clear = el('button', 'clear-recent', 'Clear all');
+  clear.type = 'button';
+  clear.onclick = (e) => { e.stopPropagation(); window.mine.forgetAll(); input.focus(); };
+  head.appendChild(clear);
+  resultsBox.appendChild(head);
+  recent.forEach(stop => {
+    const row = mineRow(stop.name);
+    const forget = el('button', 'forget');
+    forget.type = 'button';
+    forget.setAttribute('aria-label', `Remove ${stop.name} from the recent stops`);
+    forget.onclick = (e) => { e.stopPropagation(); window.mine.forget(stop.id); };
+    row.appendChild(forget);
+    row.onclick = () => selectStop(stop.id, stop.name, 'search');
+    resultsBox.appendChild(row);
+  });
+}
+
+function mineRow(name) {
+  const row = el('div', 'result mine');
+  row.setAttribute('role', 'option');
+  row.appendChild(el('span', 'result-name', name));
+  return row;
+}
+
+// a star that saves a favourite or takes it away again (its look is in the stylesheet)
+function starButton(on, label, onclick) {
+  const star = el('button', on ? 'fav-star on' : 'fav-star');
+  star.type = 'button';
+  star.title = label;
+  star.setAttribute('aria-label', label);
+  star.setAttribute('aria-pressed', String(on));
+  star.onclick = (e) => { e.stopPropagation(); onclick(); };
+  return star;
+}
+
+// open a favourite: a stop as usual; a platform on its tab, with only it shown
+function openFavourite(favourite) {
+  if (!favourite.platform) { selectStop(favourite.stop.id, favourite.stop.name, 'search'); return; }
+  selectStop(favourite.stop.id, favourite.stop.name, 'search', { tab: favourite.platform.tab || '', platform: favourite });
+}
+
+// a star was set or taken away (here or in another tab): show it everywhere
+document.addEventListener('mine-changed', () => {
+  if (mineShown) showMine();
+  if (lastData) render();
+});
+
 async function searchStops(q) {
   const request = ++searchCounter;
   let res;
@@ -238,7 +313,8 @@ async function searchStops(q) {
 // `source` says where the stop was picked ('search', 'link' or 'map'; or
 // address.js: 'address' = the page was opened at the stop's own address,
 // 'history' = the Back button), so the map knows whether it should move there
-function selectStop(id, name, source = 'search') {
+// `options` (a favourite platform): {tab, platform: the favourite}
+function selectStop(id, name, source = 'search', options = {}) {
   input.value = name;
   pickedName = name;
   input.blur();      // on a phone: the keyboard goes away
@@ -251,7 +327,9 @@ function selectStop(id, name, source = 'search') {
   // on a phone the sheet comes up to show the departures (sheet.js)
   document.dispatchEvent(new CustomEvent('stop-picked', { detail: { id, source } }));
   announced = false;
-  currentTab = '';
+  currentTab = options.tab || '';
+  onlyPlatform = options.platform || null;
+  markOnlyPlatform = Boolean(onlyPlatform);
   shownCount.clear();
   closeStops();
   clearPlatformMark();
@@ -272,6 +350,7 @@ function closeStop() {
   clearInterval(refreshTimer);
   currentStopId = null;
   currentTab = '';
+  onlyPlatform = null;
   lastData = null;
   shownCount.clear();
   closeStops();
@@ -310,6 +389,7 @@ function closeOpen() {
 
 function selectTab(tabId) {
   currentTab = tabId;
+  onlyPlatform = null;
   document.querySelectorAll('.tab').forEach(button => button.classList.toggle('active', button.dataset.tab === tabId));
   shownCount.clear();
   closeStops();
@@ -350,7 +430,14 @@ async function loadDepartures() {
     if (document.activeElement !== input) input.value = pickedName;
     showClear();
     document.title = `${pickedName} · ${PAGE_TITLE}`;
+    window.mine.remember(lastData.stop);
     document.dispatchEvent(new CustomEvent('stop-shown', { detail: { stop: lastData.stop, source: selectedFrom } }));
+  }
+  // a favourite platform: the map shows where it is (once; the user may take the mark off)
+  if (markOnlyPlatform) {
+    markOnlyPlatform = false;
+    const found = window.mine.findPlatform(onlyPlatform, lastData);
+    if (found) { markPlatform(found[0], found[1], 'favourite'); render(); }
   }
   status.textContent = 'Updated ' + clockFormat.format(new Date());
 }
@@ -432,6 +519,7 @@ function renderPeek(data) {
   const candidates = [];
   data.modes.forEach(mode => mode.platforms.forEach(platform => {
     if (markedPlatform && platformKey(mode, platform) !== markedPlatform) return;
+    if (onlyPlatform && !onlyPlatformIs(mode, platform, data)) return;
     platform.departures.forEach(dep => { if (!dep.cancelled) candidates.push([dep, mode, platform]); });
   }));
   if (!candidates.length) {
@@ -605,7 +693,14 @@ function stopLink(stop) {
 
 function renderStation(data) {
   stationBox.innerHTML = '';
-  stationBox.appendChild(el('h2', 'station-name', data.stop.name));
+  const name = el('h2', 'station-name', data.stop.name);
+  const saved = window.mine.isFavouriteStop(data.stop.id);
+  name.appendChild(starButton(saved, saved ? 'Remove this stop from favourites' : 'Save this stop as a favourite', () => {
+    const favourite = { stop: { id: data.stop.id, name: data.stop.name } };
+    if (window.mine.isFavouriteStop(data.stop.id)) window.mine.remove(favourite);
+    else window.mine.add(favourite);
+  }));
+  stationBox.appendChild(name);
 
   // when the board is empty, or only has departures days ahead, the nearby
   // stations are part of the notice on the board instead
@@ -786,6 +881,12 @@ function renderPlatform(mode, platform) {
       }
       render();
     };
+    const favourite = window.mine.favouriteFor(lastData.stop.id, mode, platform, lastData);
+    title.appendChild(starButton(Boolean(favourite), favourite ? 'Remove this platform from favourites' : 'Save this platform as a favourite', () => {
+      if (favourite) window.mine.remove(favourite);
+      else window.mine.add({ stop: { id: lastData.stop.id, name: lastData.stop.name },
+        platform: { mode: mode.id, modeName: mode.name, id: platform.id, name: platform.name, tab: lastData.tab || '' } });
+    }));
     block.appendChild(title);
   }
 
@@ -860,11 +961,34 @@ function renderBoard(data) {
     board.appendChild(notice);
   }
 
+  if (onlyPlatform) board.appendChild(onlyPlatformBar(data));
+
   // modes and platforms within them already arrive pre-sorted from the backend
   data.modes.forEach(mode => {
+    const platforms = mode.platforms.filter(platform => !onlyPlatform || onlyPlatformIs(mode, platform, data));
+    if (!platforms.length) return;
     const section = el('div', 'mode-section');
     section.appendChild(el('div', `mode-header mode-${mode.id}`, mode.name));
-    mode.platforms.forEach(platform => section.appendChild(renderPlatform(mode, platform)));
+    platforms.forEach(platform => section.appendChild(renderPlatform(mode, platform)));
     board.appendChild(section);
   });
+}
+
+// the platform of the favourite opened
+function onlyPlatformIs(mode, platform, data) {
+  const found = window.mine.findPlatform(onlyPlatform, data);
+  return Boolean(found) && found[0] === mode && found[1] === platform;
+}
+
+// "Only Platform 2 is shown. Show all platforms"
+function onlyPlatformBar(data) {
+  const bar = el('div', 'only-platform');
+  const found = window.mine.findPlatform(onlyPlatform, data);
+  bar.appendChild(el('span', '', found ? `Only ${found[1].name} is shown.`
+    : `${onlyPlatform.platform.name} has no departures in this list right now.`));
+  const all = el('button', 'show-all', 'Show all platforms');
+  all.type = 'button';
+  all.onclick = () => { onlyPlatform = null; render(); };
+  bar.appendChild(all);
+  return bar;
 }

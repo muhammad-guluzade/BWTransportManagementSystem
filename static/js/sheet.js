@@ -49,7 +49,7 @@
   const screens = () => document.body.classList.contains('layout-screens');
   const hasStop = () => picked;
   // the top strip: the head, except its tabs, links and buttons (they are tapped, the tabs also scroll sideways)
-  const grabbable = target => head.contains(target) && !target.closest('.tabs, a, #sheet-map, .peek-close');
+  const grabbable = target => head.contains(target) && !target.closest('.tabs, a, #sheet-map, .peek-close, .fav-star');
   // the heights there are in the layout, top to bottom
   const heights = () => (screens() ? ['full', 'peek'] : ['full', 'half', 'peek']);
 
