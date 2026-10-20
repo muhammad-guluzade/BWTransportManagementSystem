@@ -49,6 +49,10 @@ let markShown = false;         // it was found while drawing the board
 // A favourite platform was opened (mine.js): only that platform is shown,
 // until "Show all platforms", another tab or another stop.
 let onlyPlatform = null;       // the favourite, or null
+
+// The line filter: the lines picked from the chips above the board, for each
+// tab, kept while the stop is shown. None picked = every line.
+const pickedLines = new Map();  // tab id -> Set of chip names (see chipOf)
 let markOnlyPlatform = false;  // its platform still has to be marked on the map (first load)
 
 // departure times arrive in UTC; show them in local German time
@@ -330,6 +334,7 @@ function selectStop(id, name, source = 'search', options = {}) {
   currentTab = options.tab || '';
   onlyPlatform = options.platform || null;
   markOnlyPlatform = Boolean(onlyPlatform);
+  pickedLines.clear();
   shownCount.clear();
   closeStops();
   clearPlatformMark();
@@ -351,6 +356,7 @@ function closeStop() {
   currentStopId = null;
   currentTab = '';
   onlyPlatform = null;
+  pickedLines.clear();
   lastData = null;
   shownCount.clear();
   closeStops();
@@ -461,7 +467,18 @@ function render() {
   const putBack = holdList();
   openShown = false;
   markShown = false;
+  // the rows of tabs and line chips scroll sideways: they stay where they were
+  const sideways = ['.tabs', '.line-chips'].map(selector => [selector, (stationBox.querySelector(selector) || {}).scrollLeft || 0]);
+  // ... and a tab or chip that has the keyboard's focus keeps it
+  const focused = stationBox.contains(document.activeElement) && document.activeElement.matches('.tab, .line-chip')
+    ? [document.activeElement.className.split(' ')[0], document.activeElement.textContent] : null;
+  dropGoneLines(lastData);
   renderStation(lastData);
+  sideways.forEach(([selector, left]) => { const row = stationBox.querySelector(selector); if (row) row.scrollLeft = left; });
+  if (focused) {
+    const again = [...stationBox.querySelectorAll(`.${focused[0]}`)].find(button => button.textContent === focused[1]);
+    if (again) again.focus({ preventScroll: true });
+  }
   renderBoard(lastData);
   // the departure whose stops were open is no longer on the board (it has left)
   if (openDeparture && !openShown) closeStops();
@@ -520,7 +537,7 @@ function renderPeek(data) {
   data.modes.forEach(mode => mode.platforms.forEach(platform => {
     if (markedPlatform && platformKey(mode, platform) !== markedPlatform) return;
     if (onlyPlatform && !onlyPlatformIs(mode, platform, data)) return;
-    platform.departures.forEach(dep => { if (!dep.cancelled) candidates.push([dep, mode, platform]); });
+    platform.departures.forEach(dep => { if (!dep.cancelled && linePicked(dep, mode)) candidates.push([dep, mode, platform]); });
   }));
   if (!candidates.length) {
     peekBox.appendChild(el('span', 'destination', data.modes.length ? 'No further departures shown' : 'No departures soon'));
@@ -723,6 +740,75 @@ function renderStation(data) {
     });
     stationBox.appendChild(tabs);
   }
+
+  // the line filter: one chip per line of this tab (two at least), "All lines" first
+  const chips = lineChips(data);
+  if (chips.length > 1 || picked().size) {
+    const row = el('div', 'line-chips');
+    row.setAttribute('role', 'group');
+    row.setAttribute('aria-label', 'Show only these lines');
+    const all = el('button', picked().size ? 'line-chip all' : 'line-chip all on');
+    all.appendChild(el('span', 'line-badge line-all', 'All lines'));
+    all.type = 'button';
+    all.setAttribute('aria-pressed', String(!picked().size));
+    all.onclick = () => { picked().clear(); render(); };
+    row.appendChild(all);
+    chips.forEach(chip => {
+      const on = picked().has(chip.name);
+      const button = el('button', on ? 'line-chip on' : 'line-chip');
+      button.type = 'button';
+      button.setAttribute('aria-pressed', String(on));
+      button.title = on ? `Show ${chip.name} no longer` : `Show only ${chip.name}`;
+      button.appendChild(el('span', badgeClass(chip.dep, chip.mode), chip.name));
+      button.onclick = () => {
+        const lines = picked();
+        if (lines.has(chip.name)) lines.delete(chip.name);
+        else lines.add(chip.name);
+        render();
+      };
+      row.appendChild(button);
+    });
+    stationBox.appendChild(row);
+  }
+}
+
+// Long-distance trains are named by their train number ("ICE 378", "IC 2013"):
+// their chip is their kind. Every other line is a chip of its own.
+const TRAIN_KINDS = { ICE: 'ICE', IC: 'IC/EC', EC: 'IC/EC', ECE: 'IC/EC', ICD: 'IC/EC', TGV: 'TGV', FLX: 'FLX',
+  NJ: 'NJ', EN: 'EN', RJ: 'RJ', RJX: 'RJ', IR: 'IR', EST: 'EST' };
+const TRAIN_MODES = ['trains', 'long_distance_train', 'regional_train'];
+
+function chipOf(dep, mode) {
+  const kind = TRAIN_MODES.includes(mode.id) && /^([A-Z]+) ?\d/.exec(dep.line);
+  return kind && TRAIN_KINDS[kind[1]] ? TRAIN_KINDS[kind[1]] : dep.line;
+}
+
+// the lines picked on the tab shown (a set that the chips change)
+function picked() {
+  const tab = (lastData && lastData.tab) || '';
+  if (!pickedLines.has(tab)) pickedLines.set(tab, new Set());
+  return pickedLines.get(tab);
+}
+
+const linePicked = (dep, mode) => !picked().size || picked().has(chipOf(dep, mode));
+
+// the chips of the board shown: [{name, dep, mode}], one per line with a
+// departure in the list (of the one platform, when only a favourite platform
+// is shown), in the board's order of kinds, train kinds first, then by name
+// ("U5" before "U15", "RE2" before "RE 87")
+function lineChips(data) {
+  const chips = new Map();
+  data.modes.forEach((mode, order) => mode.platforms.forEach(platform => {
+    if (onlyPlatform && !onlyPlatformIs(mode, platform, data)) return;
+    platform.departures.forEach(dep => {
+      const name = chipOf(dep, mode);
+      if (!chips.has(name)) chips.set(name, { name, dep, mode, order, kind: name !== dep.line });
+    });
+  }));
+  // (spaces don't count: the timetable writes "RE 87" next to "RE2")
+  const bare = name => name.replace(/\s+/g, '');
+  return [...chips.values()].sort((a, b) => a.order - b.order || b.kind - a.kind
+    || bare(a.name).localeCompare(bare(b.name), 'de', { numeric: true }));
 }
 
 function formatTime(iso) {
@@ -863,7 +949,8 @@ function formatWait(minutes) {
   return `${Math.floor(minutes / 1440)} d ${Math.floor((minutes % 1440) / 60)} h`;
 }
 
-function renderPlatform(mode, platform) {
+// `departures`: the ones to show (the line filter may leave some out)
+function renderPlatform(mode, platform, departures = platform.departures) {
   const block = el('div', 'platform-block');
   const key = platformKey(mode, platform);
   const marked = key === markedPlatform;
@@ -890,11 +977,11 @@ function renderPlatform(mode, platform) {
     block.appendChild(title);
   }
 
-  const count = Math.min(shownCount.get(key) || PER_PLATFORM, platform.departures.length);
-  const hidden = platform.departures.length - count;
+  const count = Math.min(shownCount.get(key) || PER_PLATFORM, departures.length);
+  const hidden = departures.length - count;
 
   const table = el('table');
-  platform.departures.slice(0, count).forEach(dep => {
+  departures.slice(0, count).forEach(dep => {
     table.appendChild(renderDeparture(dep, mode, platform));
     if (dep.id === openDeparture && !openShown) {
       openShown = true;
@@ -965,13 +1052,23 @@ function renderBoard(data) {
 
   // modes and platforms within them already arrive pre-sorted from the backend
   data.modes.forEach(mode => {
-    const platforms = mode.platforms.filter(platform => !onlyPlatform || onlyPlatformIs(mode, platform, data));
+    const platforms = mode.platforms
+      .filter(platform => !onlyPlatform || onlyPlatformIs(mode, platform, data))
+      .map(platform => [platform, platform.departures.filter(dep => linePicked(dep, mode))])
+      .filter(([, departures]) => departures.length);
     if (!platforms.length) return;
     const section = el('div', 'mode-section');
     section.appendChild(el('div', `mode-header mode-${mode.id}`, mode.name));
-    platforms.forEach(platform => section.appendChild(renderPlatform(mode, platform)));
+    platforms.forEach(([platform, departures]) => section.appendChild(renderPlatform(mode, platform, departures)));
     board.appendChild(section);
   });
+}
+
+// A picked line that has no departure in the list any more (its last one has
+// left) loses its chip and leaves the choice; with none left, every line shows.
+function dropGoneLines(data) {
+  const lines = new Set(lineChips(data).map(chip => chip.name));
+  [...picked()].forEach(name => { if (!lines.has(name)) picked().delete(name); });
 }
 
 // the platform of the favourite opened

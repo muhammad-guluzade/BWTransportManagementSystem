@@ -37,7 +37,7 @@
 
   let state = 'peek';
   let y = 0;            // how far the sheet is pushed down from its full height, in px
-  let drag = null;      // the drag going on: {startY, startSheetY, startState, moving, lastY, lastT, speed}
+  let drag = null;      // the drag going on: {startX, startY, startSheetY, startState, sideways, moving, lastY, lastT, speed}
   let listTouch = null; // a touch in the list that may become a pull-down: {y}
   let justDragged = false;
   let picked = false;   // a stop has been picked: until then the sheet has nothing to open for
@@ -48,8 +48,16 @@
   const active = () => narrow.matches;
   const screens = () => document.body.classList.contains('layout-screens');
   const hasStop = () => picked;
-  // the top strip: the head, except its tabs, links and buttons (they are tapped, the tabs also scroll sideways)
-  const grabbable = target => head.contains(target) && !target.closest('.tabs, a, #sheet-map, .peek-close, .fav-star');
+  // The sheet's parts (the user's design, 19 October). Where a finger comes
+  // down decides what the whole touch does, wherever the finger goes after,
+  // until it is lifted:
+  //   'strip' (the grip, the stop's name, the status line) and 'tabs': up and
+  //     down move the sheet; the tabs also scroll sideways, and a touch that
+  //     starts sideways there is theirs;
+  //   'chips' (the line filter): they only scroll sideways (style.css);
+  //   'list': it scrolls; pulled down at its very top, the sheet goes down.
+  const zoneOf = target => (!head.contains(target) ? 'list'
+    : target.closest('.line-chips') ? 'chips' : target.closest('.tabs') ? 'tabs' : 'strip');
   // the heights there are in the layout, top to bottom
   const heights = () => (screens() ? ['full', 'peek'] : ['full', 'half', 'peek']);
 
@@ -104,16 +112,21 @@
   }
 
   // ---------- dragging (the sheet only) ----------
-  function start(clientY) {
+  // `sideways`: the touch may also turn out to be a sideways one (the tabs)
+  function start(clientX, clientY, sideways = false) {
     if (!active() || screens()) return;
-    drag = { startY: clientY, startSheetY: y, startState: state, moving: false, lastY: clientY, lastT: performance.now(), speed: 0 };
+    drag = { startX: clientX, startY: clientY, startSheetY: y, startState: state, sideways, moving: false,
+      lastY: clientY, lastT: performance.now(), speed: 0 };
   }
 
-  function move(clientY, event) {
+  function move(clientX, clientY, event) {
     if (!drag) return;
     const dy = clientY - drag.startY;
     if (!drag.moving) {
-      if (Math.abs(dy) < SLOP) return;   // not yet: it may still be a tap
+      const dx = clientX - drag.startX;
+      if (Math.abs(dy) < SLOP && (!drag.sideways || Math.abs(dx) < SLOP)) return;   // not yet: it may still be a tap
+      // more sideways than up or down on the tabs: they scroll, the sheet stays
+      if (drag.sideways && Math.abs(dx) > Math.abs(dy)) { drag = null; return; }
       drag.moving = true;
       document.body.classList.remove('sheet-animate');
     }
@@ -145,30 +158,33 @@
     setState(next);
   }
 
-  // Fingers: a touch on the top strip drags the sheet; a touch in the list
-  // scrolls it, except a pull downwards that starts at the list's very top.
+  // Fingers: what a touch does depends only on where it started (zoneOf)
   panel.addEventListener('touchstart', (e) => {
+    listTouch = null;
+    drag = null;
     if (!active() || screens()) return;
-    const at = e.touches[0].clientY;
-    if (grabbable(e.target)) start(at);
-    else if (state !== 'peek' && panel.scrollTop <= 0) listTouch = { y: at };
+    const { clientX, clientY } = e.touches[0];
+    const zone = zoneOf(e.target);
+    if (zone === 'strip' || zone === 'tabs') start(clientX, clientY, zone === 'tabs');
+    else if (zone === 'list' && state !== 'peek' && panel.scrollTop <= 0) listTouch = { x: clientX, y: clientY };
   }, { passive: true });
   panel.addEventListener('touchmove', (e) => {
-    const at = e.touches[0].clientY;
+    const { clientX, clientY } = e.touches[0];
     if (!drag && listTouch) {
-      const dy = at - listTouch.y;
-      if (dy > SLOP && panel.scrollTop <= 0) { start(listTouch.y); listTouch = null; }   // pulled down from the top
-      else if (Math.abs(dy) > SLOP) listTouch = null;                                     // the list's own scrolling
+      const dy = clientY - listTouch.y;
+      if (dy > SLOP && panel.scrollTop <= 0) { start(listTouch.x, listTouch.y); listTouch = null; }   // pulled down from the top
+      else if (Math.abs(dy) > SLOP) listTouch = null;                                                 // the list's own scrolling
     }
-    move(at, e);
+    move(clientX, clientY, e);
   }, { passive: false });
   panel.addEventListener('touchend', end);
   panel.addEventListener('touchcancel', end);
   // a mouse (a narrow browser window on a laptop) drags by the top strip
   head.addEventListener('pointerdown', (e) => {
-    if (e.pointerType !== 'mouse' || e.button !== 0 || !grabbable(e.target)) return;
-    start(e.clientY);
-    const onMove = (ev) => move(ev.clientY, ev);
+    const zone = zoneOf(e.target);
+    if (e.pointerType !== 'mouse' || e.button !== 0 || (zone !== 'strip' && zone !== 'tabs')) return;
+    start(e.clientX, e.clientY, zone === 'tabs');
+    const onMove = (ev) => move(ev.clientX, ev.clientY, ev);
     const onUp = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); end(); };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
