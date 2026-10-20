@@ -181,19 +181,49 @@ def dedupe(departures: list) -> list:
     kept = [dep for dep in kept.values() if dep.get("platform_code") or trip(dep) not in with_platform]
     # The French timetable has the Paris trains too, without a number (shown
     # as "Zug") and sometimes at another platform (Stuttgart Hbf: 10 instead
-    # of 4). A numberless train is that copy when a numbered one leaves for
-    # the same destination at the same time; then only the numbered one stays.
-    # (A train whose label simply has no number, like "SAB", has no such twin.)
-    numbered = {(dep["destination"], dep["planned"]) for dep in kept if dep["mode"] in TRAIN_MODES and re.search(r"\d", dep["line"])}
-    return [dep for dep in kept if not (dep["mode"] in TRAIN_MODES and not re.search(r"\d", dep["line"])
-                                        and (dep["destination"], dep["planned"]) in numbered)]
+    # of 4). A numberless train is that copy when a numbered one leaves at the
+    # same time for the same destination: the same name, or (the names are
+    # spelt differently: "München Hbf" / "München Hauptbahnhof") the same last
+    # station. Then only the numbered one stays. (A train whose label simply
+    # has no number, like "SAB", has no such twin.)
+    numbered = [dep for dep in kept if dep["mode"] in TRAIN_MODES and re.search(r"\d", dep["line"])]
+
+    def has_twin(dep):
+        return any(other["planned"] == dep["planned"]
+                   and (other["destination"] == dep["destination"]
+                        or (dep.get("last_station") and other.get("last_station") == dep["last_station"]))
+                   for other in numbered)
+    return [dep for dep in kept if not (dep["mode"] in TRAIN_MODES and not re.search(r"\d", dep["line"]) and has_twin(dep))]
+
+
+def plain(name: str) -> str:
+    """A name for comparing: lower case, words only ("Stuttgart, Hauptbahnhof"
+    and "Stuttgart Hauptbahnhof" are the same)."""
+    return " ".join(re.findall(r"\w+", name.lower()))
+
+
+def ends_here(dep: dict, station: dict) -> bool:
+    """A train that ends at this station: EFA lists it among the departures
+    (Stuttgart Hbf: "RE90 -> Stuttgart Hauptbahnhof"), though it goes nowhere
+    from here. Both must hold: no stop after this one, and this station as the
+    destination, so that a departure whose stops EFA left out still shows."""
+    if dep.get("last_station") is not None:
+        return False
+    destination, here = plain(dep.get("destination_full") or ""), plain(station.get("name") or "")
+    return bool(destination) and (here.startswith(destination) or destination.startswith(here))
+
+
+def departing(departures: list, station: dict) -> list:
+    """The departures of a station: each trip once (`dedupe`), without the
+    trains that end here."""
+    return [dep for dep in dedupe(departures) if not ends_here(dep, station)]
 
 
 # two platform positions this close are one place to stand
 SAME_SPOT_METRES = 5
 # what a departure row carries only for the grouping
 PLATFORM_FIELDS = ("mode", "platform", "platform_code", "platform_area", "platform_id", "platform_lat", "platform_lon",
-                   "platform_named", "platform_moved", "next_stop")
+                   "platform_named", "platform_moved", "next_stop", "last_station", "destination_full")
 
 
 def metres(a: tuple, b: tuple) -> float:
@@ -435,7 +465,7 @@ def platform_board(station: dict, nearby: list, platform_id: str, trains_togethe
     events = [event for event in client.get_departures(platform_id).get("stopEvents") or []
               if isinstance(event, dict) and (event.get("location") or {}).get("id") == platform_id]
     tab = next((parse.tab_of(event.get("transportation") or {}) for event in events if not parse.is_excluded(event)), None)
-    departures = dedupe(parse_events(events))
+    departures = departing(parse_events(events), station)
     if trains_together:
         put_trains_together(departures)
     heading = towards(departures)
@@ -484,11 +514,11 @@ def board(stop_id: str, tab_id: str = "", platform_id: str = "", trains_together
         return platform_board(station, nearby, platform_id, trains_together)
 
     tabs, tab, departures = load_tab(station, tab_id)
-    departures = dedupe(departures)
+    departures = departing(departures, station)
 
     next_service = None
     if not departures:
-        departures = dedupe(later_departures(station["id"]))
+        departures = departing(later_departures(station["id"]), station)
         times = [dep["time"] for dep in departures if dep["time"]]
         if times:
             next_service = to_local(parse.parse_time(min(times))).date().isoformat()

@@ -205,6 +205,11 @@ def dticket_valid(transportation: dict) -> bool | None:
     return None
 
 
+# Train types under the name riders know: DB's code for the TGV is "RHT"
+# (EFA: "RHT 9570 TGV"; DB Navigator and the station's boards: "TGV 9570")
+TRAIN_TYPE_SHOWN = {"RHT": "TGV"}
+
+
 def line_name(transportation: dict) -> str:
     """Rider-facing line label, e.g. 'U7', 'RE5', 'ICE 1291'."""
     if transportation.get("disassembledName"):
@@ -219,7 +224,8 @@ def line_name(transportation: dict) -> str:
         return number
     # long-distance trains have no line name, only a type and train number
     if props.get("trainType"):
-        return f"{props['trainType']} {train_number}".strip()
+        kind = TRAIN_TYPE_SHOWN.get(props["trainType"], props["trainType"])
+        return f"{kind} {train_number}".strip()
     return number or transportation.get("name") or "?"
 
 
@@ -302,6 +308,12 @@ def station_of(location: dict) -> dict:
     if not parent or location.get("type") == "stop" or parent.get("type") == "locality":
         return location
     return parent
+
+
+def last_station(event: dict) -> str | None:
+    """The id of the station where the trip ends; None when no stop follows."""
+    onward = event.get("onwardLocations") or []
+    return station_of(onward[-1]).get("id") if onward else None
 
 
 def onward_name(onward_location: dict) -> str:
@@ -587,6 +599,11 @@ def parse_departure(event: dict, now: datetime | None = None, importance: dict |
         # moved to another platform today; the id still is the planned one's
         "platform_moved": bool(signposted) and (properties.get("plannedPlatformName") or signposted).strip() != signposted,
         "next_stop": next_stop(event),
+        # where the trip ends (its last station's id; None: no stop after this
+        # one) and the destination as EFA names it: to tell two timetables'
+        # copies of one train apart (`dedupe`), and a train ending here
+        "last_station": last_station(event),
+        "destination_full": (transportation.get("destination") or {}).get("name") or "",
         "line": line_name(transportation),
         "destination": destination,
         # on ring lines the sign on the vehicle names a stop on the way, not

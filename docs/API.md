@@ -268,6 +268,11 @@ A station shows only its own departures. Stations right next to it (e.g. the
 underground part of a main station, or the bus station in front of it) are
 listed in `nearby` and have boards of their own.
 
+Each trip is listed once, also where the timetable service has it twice (a
+live copy, or a second timetable such as the French one for the Paris trains,
+there without a train number). A train that ends at this station is not a
+departure and is left out, although the timetable service lists it.
+
 Example: `/api/v1/stops/de:08111:6115/departures` (shortened to one platform
 and one departure)
 
@@ -370,7 +375,7 @@ Tab ids: `trains`, `sbahn`, `tram`, `bus`, `ferry`, `cablecar`, `other`.
 | Field | |
 |---|---|
 | `id` | Identifies this departure on this station's board. Use it to ask for the departure's stops (next endpoint). It stays the same from one refresh to the next, also when the live time changes, and on the board of its platform alone. Treat it as an opaque text. |
-| `line` | Line label: `"U7"`, `"RE5"`, `"ICE 1291"`. |
+| `line` | Line label: `"U7"`, `"RE5"`, `"ICE 1291"`, `"TGV 9570"`. |
 | `destination` | Where the vehicle is signed to. The town is left out if it is the station's own. |
 | `via` | Up to two major stops on the way to `destination`, in travel order: names from the departure's stop list (next endpoint), never from beyond the destination. Empty if the destination is the next stop. |
 | `dticket` | `true` if the Deutschlandticket is valid. `false` means not valid or not known. |

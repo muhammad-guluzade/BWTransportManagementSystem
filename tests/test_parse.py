@@ -100,6 +100,12 @@ class LineNameTest(unittest.TestCase):
         t["name"] = "ICE 1291 InterCityExpress"
         self.assertEqual(parse.line_name(t), "ICE 1291")
 
+    def test_tgv_under_its_own_name(self):
+        # DB's code for the TGV is "RHT"; riders know it as "TGV 9570" (as EFA's name says too)
+        t = {"name": "RHT 9570 TGV", "number": "9570", "product": {"class": 16, "name": "Zug"},
+             "properties": {"trainName": "TGV", "trainType": "RHT", "trainNumber": "9570"}}
+        self.assertEqual(parse.line_name(t), "TGV 9570")
+
     def test_fallback(self):
         self.assertEqual(parse.line_name({"name": "Zug"}), "Zug")
         self.assertEqual(parse.line_name({}), "?")
@@ -820,6 +826,35 @@ class SecondTimetableTest(unittest.TestCase):
         # ... and so does a numberless one to another place or at another time
         other_time = {**copy, "planned": "2026-10-17T05:00:00Z"}
         self.assertEqual(dedupe([other_time, ice]), [other_time, ice])
+
+    def test_the_numberless_copy_with_the_destination_spelt_otherwise_goes(self):
+        # Stuttgart Hbf, TGV 9577: DB says "München Hbf", the French timetable "München
+        # Hauptbahnhof"; both trips end at the same station
+        from services.departures import dedupe
+        tgv = {**self.dep(line="TGV 9577", platform="16", destination="München Hbf", mode="Long-distance train"), "last_station": "de:09162:100"}
+        copy = {**self.dep(line="Zug", platform="10", destination="München Hauptbahnhof", mode="Regional train"), "last_station": "de:09162:100"}
+        self.assertEqual(dedupe([copy, tgv]), [tgv])
+        # another last station and another name: another train
+        elsewhere = {**copy, "destination": "Ulm Hbf", "last_station": "de:08421:1008"}
+        self.assertEqual(dedupe([elsewhere, tgv]), [elsewhere, tgv])
+        # no stop after it (last station unknown): only the name can make it a copy
+        unknown = {**copy, "last_station": None}
+        self.assertEqual(dedupe([unknown, {**tgv, "last_station": None}]), [unknown, {**tgv, "last_station": None}])
+
+    def test_a_train_ending_here_is_no_departure(self):
+        from services.departures import departing, ends_here
+        station = {"id": "de:08111:6115", "name": "Stuttgart, Hauptbahnhof"}
+        ends = {**self.dep(line="RE90", destination="Hauptbahnhof", mode="Regional train"), "last_station": None,
+                "destination_full": "Stuttgart Hauptbahnhof", "id": "a"}
+        self.assertTrue(ends_here(ends, station))
+        self.assertTrue(ends_here(ends, {**station, "name": "Stuttgart Hauptbahnhof (oben)"}))
+        # stops after it: it goes on (a ring line's sign can name this station)
+        self.assertFalse(ends_here({**ends, "last_station": "de:08111:6008"}, station))
+        # EFA left out the stops but the sign names another place: still shown
+        self.assertFalse(ends_here({**ends, "destination_full": "Aalen, Hauptbahnhof"}, station))
+        going = {**self.dep(line="RE1", destination="Aalen, Hauptbahnhof", mode="Regional train"), "last_station": "de:08136:1000",
+                 "destination_full": "Aalen, Hauptbahnhof", "id": "b"}
+        self.assertEqual(departing([ends, going], station), [going])
 
     def test_what_is_not_a_copy_stays(self):
         from services.departures import dedupe
