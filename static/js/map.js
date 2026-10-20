@@ -212,7 +212,10 @@
         bubblingMouseEvents: false,   // a tap on a stop is not a tap on the empty map
       });
       marker.stopId = stop.id;
-      marker.bindTooltip(stop.name, { direction: 'top' });
+      // the name as plain text: Leaflet would read a string as HTML
+      const label = document.createElement('span');
+      label.textContent = stop.name;
+      marker.bindTooltip(label, { direction: 'top' });
       marker.on('click', () => selectStop(stop.id, stop.name, 'map'));
       stopsLayer.addLayer(marker);
       // the timetable service and the stop database place a station a few
