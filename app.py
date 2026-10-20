@@ -10,10 +10,12 @@ This file only wires things together:
   templates/     -- the web pages, which use the JSON API like any client
 """
 
+import gzip
 import os
 import threading
+import time
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 
 from api import v1
 from gtfs import store
@@ -53,6 +55,57 @@ def static_version(endpoint, values):
             pass  # a missing file: the address stays as it is (and gives 404)
 
 
+def page_version() -> str:
+    """The version of the page and its files: the newest change time among
+    them. Every API answer names it (X-App-Version), and an open page that
+    was built with another one knows that the app has been updated
+    (static/js/update.js). Looked up at most once a second."""
+    now = time.monotonic()
+    if now - _version[0] > 1:
+        newest = 0
+        for folder in (app.static_folder, os.path.join(app.root_path, app.template_folder)):
+            for root, _, files in os.walk(folder):
+                for name in files:
+                    try:
+                        newest = max(newest, os.stat(os.path.join(root, name)).st_mtime)
+                    except OSError:
+                        pass  # removed meanwhile
+        _version[:] = [now, str(int(newest))]
+    return _version[1]
+
+
+_version = [float("-inf"), ""]
+
+# answers worth compressing: text, and long enough to gain from it
+COMPRESSED_TYPES = {"application/json", "text/html", "text/plain", "text/css", "application/javascript", "text/javascript"}
+COMPRESS_FROM_BYTES = 1024
+
+
+@app.after_request
+def finish(response):
+    """Every answer: a few safety headers; the API's: the page version;
+    text answers gzip-compressed when the browser takes them so (a board's
+    35 KB of JSON become about 3 KB on the way to a phone)."""
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    if request.path.startswith("/api/"):
+        response.headers["X-App-Version"] = page_version()
+    if (response.direct_passthrough                       # a file sent as it is (the page's files)
+            or "gzip" not in request.headers.get("Accept-Encoding", "").lower()
+            or "Content-Encoding" in response.headers
+            or response.mimetype not in COMPRESSED_TYPES):
+        return response
+    body = response.get_data()
+    if len(body) < COMPRESS_FROM_BYTES:
+        return response
+    response.set_data(gzip.compress(body, compresslevel=6))
+    response.headers["Content-Encoding"] = "gzip"
+    response.headers["Content-Length"] = str(len(response.get_data()))
+    response.vary.add("Accept-Encoding")
+    return response
+
+
 @app.errorhandler(404)
 @app.errorhandler(405)
 def not_found(exc):
@@ -78,10 +131,17 @@ def index(stop_id=None):
     """The one page. A stop's own address (/stop/de:08111:6115) is the same
     page; it opens that stop itself (static/js/address.js)."""
     threading.Thread(target=prepare_search, daemon=True).start()
-    response = app.make_response(render_template("index.html"))
+    response = app.make_response(render_template("index.html", version=page_version()))
     # the page is asked for anew each time, so its files' versions are current
     response.headers["Cache-Control"] = "no-cache"
     return response
+
+
+@app.route("/robots.txt")
+def robots():
+    """Search engines may list the pages, but must not call the API: each of
+    its answers can cost requests to the timetable service."""
+    return Response("User-agent: *\nAllow: /\nDisallow: /api/\n", mimetype="text/plain")
 
 
 if __name__ == "__main__":

@@ -102,6 +102,14 @@ button { font: inherit; color: inherit; }
 #favourites-toggle { right: 58px; color: var(--star); font-size: 19px; }
 #favourites-toggle:hover { background: var(--accent-soft); }
 
+/* a newer version is online (update.js): a small bar under the top bar (phones: under the round buttons) */
+#update-bar { position: fixed; z-index: 2500; top: 78px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px;
+  max-width: calc(100% - 24px); box-sizing: border-box; padding: 8px 8px 8px 16px; border-radius: 22px; background: var(--card); color: var(--text);
+  box-shadow: 0 4px 16px var(--shade); font-size: 0.9rem; }
+#update-bar[hidden] { display: none; }
+#update-bar button { flex-shrink: 0; padding: 6px 14px; border: none; border-radius: 16px; background: var(--accent); color: var(--card);
+  font-size: 0.85rem; font-weight: 600; cursor: pointer; }
+
 /* settings (menu.js): a window over the blurred page */
 #settings, #favourites { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; padding: 16px;
   padding-top: calc(16px + env(safe-area-inset-top, 0px)); padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
@@ -304,6 +312,7 @@ tr.stop.cancelled .stop-name, tr.stop.cancelled .stop-name a { text-decoration: 
   #map-area { position: fixed; inset: 0; }
   .leaflet-control-zoom { display: none; }
   #menu-toggle, #favourites-toggle { top: calc(66px + env(safe-area-inset-top, 0px)); }
+  #update-bar { top: calc(114px + env(safe-area-inset-top, 0px)); width: max-content; }
   #map-note { top: calc(66px + env(safe-area-inset-top, 0px)); max-width: calc(100% - 120px); left: 12px; transform: none; }
 
   /* the sheet: fixed below the search box; sheet.js moves it with --sheet-y */

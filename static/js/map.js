@@ -44,7 +44,7 @@
   const map = L.map('map', {
     maxBounds: BW.pad(0.1),       // the map can't be dragged away from BW
     maxBoundsViscosity: 1.0,
-    attributionControl: false,    // its credits are behind the small (i) button below
+    attributionControl: false,    // its credits are in our own control below (shown, then folded into an (i))
   });
   map.fitBounds(BW);
   map.setMinZoom(map.getZoom());  // ...or zoomed out beyond it
@@ -61,8 +61,12 @@
     keepBuffer: 4,           // and keep more of them around the picture, ready for the next move
   }).addTo(map);
 
-  // The licences of the map and the stop data ask for credits on the map:
-  // a small (i) in its corner shows them (the full ones are in the settings).
+  // The licences of the map and the stop data ask for credits on the map.
+  // OpenStreetMap's rules: visible when the map appears; they may then fold
+  // away (after five seconds, or when the map is first touched), as long as
+  // a small (i) in the corner brings them back. The full ones are in the
+  // settings.
+  const CREDITS_SHOWN_MS = 5000;
   const CREDITS = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors '
     + '&middot; &copy; <a href="https://stadiamaps.com/" target="_blank">Stadia Maps</a> '
     + '&middot; &copy; <a href="https://openmaptiles.org/" target="_blank">OpenMapTiles</a> '
@@ -73,16 +77,27 @@
       const box = L.DomUtil.create('div', 'map-credits');
       const text = L.DomUtil.create('div', 'map-credits-text', box);
       text.innerHTML = CREDITS;
-      text.hidden = true;
       const button = L.DomUtil.create('button', 'map-credits-button', box);
       button.type = 'button';
       button.textContent = 'i';
       button.setAttribute('aria-label', 'Map credits');
-      button.setAttribute('aria-expanded', 'false');
-      button.addEventListener('click', () => {
-        text.hidden = !text.hidden;
-        button.setAttribute('aria-expanded', String(!text.hidden));
-      });
+      const show = (shown) => {
+        text.hidden = !shown;
+        button.setAttribute('aria-expanded', String(shown));
+      };
+      show(true);
+      // folded once: after a while, or at the user's first touch of the map
+      // (not when the page itself moves the map, e.g. to a stop's address)
+      const container = map.getContainer();
+      const fold = () => {
+        clearTimeout(timer);
+        ['pointerdown', 'wheel', 'keydown'].forEach(type => container.removeEventListener(type, foldOnTouch, true));
+        if (!box.matches(':hover')) show(false);
+      };
+      const foldOnTouch = (e) => { if (!box.contains(e.target)) fold(); };
+      const timer = setTimeout(fold, CREDITS_SHOWN_MS);
+      ['pointerdown', 'wheel', 'keydown'].forEach(type => container.addEventListener(type, foldOnTouch, true));
+      button.addEventListener('click', () => show(text.hidden));
       L.DomEvent.disableClickPropagation(box);   // a tap on it is not a tap on the map
       return box;
     },
@@ -219,6 +234,7 @@
       if (request === requestCounter) showNote('The stops could not be loaded.');
       return;
     }
+    if (window.noticeVersion) noticeVersion(res);   // a newer version online? (update.js)
     if (request !== requestCounter) return;  // the map has moved on
     if (!res.ok) {
       let message = 'The stops could not be loaded.';

@@ -303,6 +303,7 @@ async function searchStops(q) {
     if (request === searchCounter) status.textContent = 'Could not search stops.';
     return;
   }
+  if (window.noticeVersion) noticeVersion(res);   // a newer version online? (update.js)
   if (request !== searchCounter) return;  // an answer to what was typed before
   if (!res.ok) {
     showResults([]);
@@ -416,6 +417,7 @@ async function loadDepartures() {
     if (request === requestCounter) showLoadError('Could not load departures.', true);
     return;
   }
+  if (window.noticeVersion) noticeVersion(res);   // a newer version online? (update.js)
   if (request !== requestCounter) return;  // the user has moved on
   if (!res.ok) {
     const message = await errorMessage(res, 'Could not load departures.');
@@ -647,6 +649,7 @@ async function loadStops() {
     if (current() && !openTrip) { openTripError = 'Could not load the stops.'; render(); }
     return;
   }
+  if (window.noticeVersion) noticeVersion(res);   // a newer version online? (update.js)
   if (!current()) return;  // the user has moved on
   if (!res.ok) {
     const message = await errorMessage(res, 'Could not load the stops.');

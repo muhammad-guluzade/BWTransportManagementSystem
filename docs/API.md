@@ -35,6 +35,14 @@ removed. Clients should ignore fields they don't know.
 **Freshness.** Departures are cached for 30 seconds, so asking more often
 than that returns the same data.
 
+**Compression.** Answers of 1 KB and more come gzip-compressed when the
+request says `Accept-Encoding: gzip` (browsers and most HTTP libraries do
+this by themselves); a board's 35 KB then travel as about 3 KB.
+
+**Page version.** Every answer carries a header `X-App-Version`: the version
+of the web page served alongside the API. The page uses it to notice an
+update while it is open; other clients can ignore it.
+
 ## Endpoints
 
 ### `GET /api/v1/`

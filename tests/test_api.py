@@ -640,7 +640,7 @@ class PageTest(unittest.TestCase):
 
     def test_page_files_carry_their_version(self):
         page = self.http.get("/").get_data(as_text=True)
-        for name in ("css/style.css", "js/menu.js", "js/mine.js", "js/departures.js", "js/favourites.js", "js/sheet.js", "js/map.js", "js/address.js"):
+        for name in ("css/style.css", "js/menu.js", "js/update.js", "js/mine.js", "js/departures.js", "js/favourites.js", "js/sheet.js", "js/map.js", "js/address.js"):
             self.assertRegex(page, rf'/static/{name}\?v=\d+"', name)
         self.assertLess(page.index("js/map.js"), page.index("js/address.js"))   # address.js opens the stop: last
         self.assertLess(page.index("js/mine.js"), page.index("js/departures.js"))   # the board uses the favourites
@@ -656,3 +656,72 @@ class PageTest(unittest.TestCase):
         res = self.http.get("/static/js/map.js")   # without a version: asked again every time
         self.assertNotIn("max-age=31536000", res.headers.get("Cache-Control", ""))
         res.close()
+
+
+class PublicServerTest(ApiTestCase):
+    """What the public server adds (app.py, serve.py): compressed answers, the
+    page version on every API answer, safety headers, robots.txt, settings."""
+
+    def test_answers_are_compressed_when_the_client_takes_it(self):
+        import gzip
+        import json
+        # a board of 20 departures (one alone is under 1 KB: that stays as it is)
+        self.events = [{**EVENT, "departureTimePlanned": f"2026-10-01T08:{minute:02d}:00Z", "departureTimeEstimated": None}
+                       for minute in range(20)]
+        plain = self.http.get(f"/api/v1/stops/{STOP}/departures")
+        packed = self.http.get(f"/api/v1/stops/{STOP}/departures", headers={"Accept-Encoding": "gzip, deflate, br"})
+        self.assertNotIn("Content-Encoding", plain.headers)
+        self.assertEqual(packed.headers["Content-Encoding"], "gzip")
+        self.assertIn("Accept-Encoding", packed.headers["Vary"])
+        self.assertEqual(int(packed.headers["Content-Length"]), len(packed.data))
+        self.assertEqual(json.loads(gzip.decompress(packed.data)), plain.get_json())
+        self.assertLess(len(packed.data), len(plain.data))
+        # small answers stay as they are, and the page's files are sent as they are
+        small = self.http.get("/api/v1/stops/nonsense/departures", headers={"Accept-Encoding": "gzip"})
+        self.assertNotIn("Content-Encoding", small.headers)
+        page = self.http.get("/", headers={"Accept-Encoding": "gzip"})
+        self.assertEqual(page.headers["Content-Encoding"], "gzip")
+        script = self.http.get("/static/js/map.js", headers={"Accept-Encoding": "gzip"})
+        self.assertNotIn("Content-Encoding", script.headers)
+        script.close()
+
+    def test_every_api_answer_names_the_page_version(self):
+        import re
+        page = self.http.get("/").get_data(as_text=True)
+        version = re.search(r'<meta name="app-version" content="(\d+)">', page).group(1)
+        for address in (f"/api/v1/stops/{STOP}/departures", "/api/v1/stops/nonsense/departures", "/api/v1/nothing-here"):
+            self.assertEqual(self.http.get(address).headers["X-App-Version"], version, address)
+        self.assertNotIn("X-App-Version", self.http.get("/").headers)
+        self.assertLess(page.index("js/update.js"), page.index("js/departures.js"))   # the board reports to it
+
+    def test_safety_headers_and_robots(self):
+        for address in ("/", f"/api/v1/stops/{STOP}/departures", "/robots.txt"):
+            res = self.http.get(address)
+            self.assertEqual(res.headers["X-Content-Type-Options"], "nosniff", address)
+            self.assertEqual(res.headers["X-Frame-Options"], "SAMEORIGIN", address)
+            self.assertIn("Referrer-Policy", res.headers, address)
+        robots = self.http.get("/robots.txt")
+        self.assertEqual(robots.mimetype, "text/plain")
+        self.assertEqual(robots.get_data(as_text=True).splitlines(), ["User-agent: *", "Allow: /", "Disallow: /api/"])
+
+    def test_server_settings(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        import serve
+        with tempfile.TemporaryDirectory() as folder:
+            env = Path(folder) / ".env"
+            env.write_text('# a comment\n\nBW_PORT=8123\nBW_HOST = "0.0.0.0"\nBW_PROXY=\'127.0.0.1\'\nnot a setting\n', encoding="utf-8")
+            self.assertEqual(serve.read_env_file(env), {"BW_PORT": "8123", "BW_HOST": "0.0.0.0", "BW_PROXY": "127.0.0.1"})
+            self.assertEqual(serve.read_env_file(Path(folder) / "missing"), {})
+            original, saved = serve.HERE, {k: os.environ.pop(k) for k in list(os.environ) if k.startswith("BW_")}
+            try:
+                serve.HERE = Path(folder)
+                os.environ["BW_THREADS"] = "4"                     # the environment wins over .env
+                os.environ["BW_PORT"] = "9000"
+                self.assertEqual(serve.settings(), {"host": "0.0.0.0", "port": 9000, "threads": 4, "proxy": "127.0.0.1"})
+            finally:
+                serve.HERE = original
+                for k in [k for k in os.environ if k.startswith("BW_")]:
+                    del os.environ[k]
+                os.environ.update(saved)

@@ -6,6 +6,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f4f5f7">
 <title>BW Departures</title>
+<meta name="description" content="Live departures for every stop in Baden-Württemberg: trains, S-Bahn, U-Bahn, trams and buses, by platform, on a map.">
+<!-- the version of this page and its files: an API answer naming another one means an update (update.js) -->
+<meta name="app-version" content="{{ version }}">
 <!-- the theme chosen in the menu (menu.js), applied before anything is drawn; none chosen: the device's -->
 <script>
   try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) { /* no storage: the device's theme */ }
@@ -15,6 +18,12 @@
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
+
+<!-- shown when a newer version of the app is online (update.js) -->
+<div id="update-bar" role="status" hidden>
+  <span>BW Departures has been updated.</span>
+  <button type="button">Reload</button>
+</div>
 
 <!-- One page, two layouts (style.css): on phones and tablets the map fills the
      screen and the panel is a sheet that slides up from the bottom (sheet.js);
@@ -116,6 +125,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="{{ url_for('static', filename='js/menu.js') }}"></script>
+<script src="{{ url_for('static', filename='js/update.js') }}"></script>
 <script src="{{ url_for('static', filename='js/mine.js') }}"></script>
 <script src="{{ url_for('static', filename='js/departures.js') }}"></script>
 <script src="{{ url_for('static', filename='js/favourites.js') }}"></script>
