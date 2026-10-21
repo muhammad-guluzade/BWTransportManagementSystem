@@ -10,6 +10,10 @@ from efa import client
 from services import stop_index, stops
 from services.stop_index import StopIndex
 
+# these tests ask the API many times in a row; the limit itself is tested in
+# test_api.RateLimitTest
+app.config["RATE_LIMIT"] = False
+
 STUTTGART, KARLSRUHE, HEILBRONN = (48.7785, 9.1790), (49.0093, 8.4040), (49.1420, 9.2190)
 KARLSRUHE_HBF, LUDWIGSBURG = (48.9935, 8.4010), (48.8921, 9.1853)
 

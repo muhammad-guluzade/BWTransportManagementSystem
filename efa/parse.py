@@ -125,6 +125,32 @@ def in_baden_wuerttemberg(stop_id: str) -> bool:
     return stop_id.startswith("de:08")
 
 
+# The shape of a station's global id in Baden-Württemberg: "de:08111:6115";
+# 62 of the 29,373 stations have letters in the last part
+# ("de:08118:nvbw_bus_11198"). Anything else is no station, and is answered
+# without asking the timetable service.
+STATION_ID = re.compile(r"de:08\d{3}:[A-Za-z0-9_-]{1,40}")
+# what may follow a station's id in the id of one of its platforms: ":1:2",
+# and sometimes free text (":0:Hp. 2", ":0:>Berw", ":2:RiN/O")
+PLATFORM_PART_LENGTH = 40
+
+
+def is_station_id(text: str) -> bool:
+    return bool(STATION_ID.fullmatch(text or ""))
+
+
+def is_platform_id_of(platform_id: str, station_id: str) -> bool:
+    """Could this be the id of one of the station's platforms? Its own id
+    (a simple stop is its only platform), or its id and more parts: short and
+    printable (a slash is fine, "RiN/O" is a direction), no ".." or "\\"."""
+    if platform_id == station_id:
+        return True
+    if not platform_id.startswith(station_id + ":"):
+        return False
+    rest = platform_id[len(station_id) + 1:]
+    return 0 < len(rest) <= PLATFORM_PART_LENGTH and rest.isprintable() and ".." not in rest and "\\" not in rest
+
+
 # --- station ---------------------------------------------------------------
 
 def tabs_for(classes) -> list:

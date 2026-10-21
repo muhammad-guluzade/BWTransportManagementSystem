@@ -39,6 +39,12 @@ than that returns the same data.
 request says `Accept-Encoding: gzip` (browsers and most HTTP libraries do
 this by themselves); a board's 35 KB then travel as about 3 KB.
 
+**Limits.** Each address may ask a limited number of times: the
+departures, a departure's stops and the search together 60 times at once,
+then one request every 2 seconds; the stops in an area (and `/api/v1/`) 120
+times at once, then 4 a second. A person using the web page stays well
+below that. Beyond it the answer is `429 too_many_requests`.
+
 **Page version.** Every answer carries a header `X-App-Version`: the version
 of the web page served alongside the API. The page uses it to notice an
 update while it is open; other clients can ignore it.
@@ -557,7 +563,8 @@ Errors use the matching HTTP status and always have this shape:
 | 404 | `unknown_departure` | The departure id isn't one of this station's, or the departure is no longer in the timetable (it left a while ago). Load the board again. |
 | 404 | `not_found` | No such API address. |
 | 405 | `method_not_allowed` | Anything other than `GET`. |
-| 502 | `timetable_unavailable` | The timetable service behind this API didn't answer. Try again later. |
+| 429 | `too_many_requests` | Too many requests from one address in a short time (see *Limits*). The `Retry-After` header says how many seconds to wait. |
+| 502 | `timetable_unavailable` | The timetable service behind this API didn't answer, or answered with nonsense (also for a stop that exists: then the service is having trouble, the stop is not unknown). Try again later. |
 | 503 | `stops_not_imported` | The stop database hasn't been built on this server, or was built by an older version (`python import_stops.py`). |
 
 `code` is for programs, `message` for people.

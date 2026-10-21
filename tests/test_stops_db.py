@@ -24,6 +24,10 @@ import import_stops
 from app import app
 from gtfs import importer, store
 
+# these tests ask the API many times in a row; the limit itself is tested in
+# test_api.RateLimitTest
+app.config["RATE_LIMIT"] = False
+
 STOPS = [
     # Stuttgart Hbf (oben): platforms only, names carry the platform
     ("de:08111:6115:1:1", "Stuttgart Hauptbahnhof (oben) Gleis 1", "48.7850", "9.1830", "0"),

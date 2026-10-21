@@ -1,16 +1,18 @@
 # The exact versions the app is tested with, so that a new server installs
-# the same (Flask 2.2 does not work with the newest Werkzeug, for example).
-Flask==2.2.5
-Werkzeug==2.2.3
-Jinja2==3.1.2
-MarkupSafe==2.1.3
-itsdangerous==2.1.2
-click==8.1.6
+# the same. Updated 2026-10-22 to the newest releases: the old ones had known
+# security holes (certifi's list of trusted authorities, urllib3, ...).
+Flask==3.1.3
+Werkzeug==3.1.9
+Jinja2==3.1.6
+MarkupSafe==3.0.4
+itsdangerous==2.2.0
+click==8.5.0
+blinker==1.9.0
 colorama==0.4.6; platform_system == "Windows"
-requests==2.31.0
-urllib3==2.1.0
-certifi==2026.1.4
-charset-normalizer==3.0.1
-idna==3.4
+requests==2.34.2
+urllib3==2.8.0
+certifi==2026.10.19
+charset-normalizer==3.5.2
+idna==3.20
 # the server program on the public server (serve.py)
 waitress==3.0.2

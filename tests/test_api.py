@@ -4,13 +4,19 @@ These pin down what docs/API.md promises. A future client (e.g. a mobile
 app) depends on these field names, so a failing test here means the API
 changed in a way that would break it. EFA is replaced by canned responses,
 so the tests need no network."""
+import math
 import unittest
 
 from datetime import datetime, timezone
 
+from api import limits, v1
 from app import app
 from efa import client, parse
 from services import departures, stops
+
+# these tests ask the API many times in a row; the limit itself is tested in
+# test_api.RateLimitTest
+app.config["RATE_LIMIT"] = False
 
 STOP = "de:08111:6115"
 NEIGHBOUR = "de:08111:6118"
@@ -563,6 +569,101 @@ class DepartureStopsTest(ApiTestCase):
         self.assert_unknown(self.get(parse.departure_id(flight)))
 
 
+class RateLimitTest(ApiTestCase):
+    """One visitor asking without pause gets 429 too_many_requests; a person
+    using the page never does."""
+    def setUp(self):
+        super().setUp()
+        self.now = [1000.0]
+        self.original = v1.limiter
+        v1.limiter = limits.Limiter(clock=lambda: self.now[0])
+        app.config["RATE_LIMIT"] = True
+
+    def tearDown(self):
+        app.config["RATE_LIMIT"] = False
+        v1.limiter = self.original
+        super().tearDown()
+
+    def get(self, path, address="203.0.113.5"):
+        return self.http.get(path, environ_base={"REMOTE_ADDR": address})
+
+    def test_a_burst_then_429_then_back(self):
+        board = f"/api/v1/stops/{STOP}/departures"
+        size, rate = limits.LIMITS["timetable"]
+        for _ in range(size):
+            self.assertEqual(self.get(board).status_code, 200)
+        res = self.get(board)
+        self.assertEqual(res.status_code, 429)
+        self.assertEqual(res.get_json()["error"]["code"], "too_many_requests")
+        self.assertEqual(res.headers["Retry-After"], str(math.ceil(1 / rate)))
+        self.assertIn("X-App-Version", res.headers)
+        # the search and a departure's stops share the bucket; the map does not
+        self.assertEqual(self.get("/api/v1/stops/search?q=Stuttgart").status_code, 429)
+        self.assertNotEqual(self.get("/api/v1/stops?bbox=9.1,48.7,9.3,48.8").status_code, 429)
+        # another visitor is not affected
+        self.assertEqual(self.get(board, address="198.51.100.7").status_code, 200)
+        # tokens come back with time
+        self.now[0] += 1 / rate
+        self.assertEqual(self.get(board).status_code, 200)
+        self.assertEqual(self.get(board).status_code, 429)
+
+    def test_a_person_is_never_limited(self):
+        # typing a long name letter by letter, opening ten stops with a tab
+        # switch and a departure each, eight favourites prepared, then an open
+        # board refreshing every 30 seconds with its open departure for an hour
+        for i in range(1, 30):
+            self.assertNotEqual(self.get(f"/api/v1/stops/search?q={'Stuttgart Hauptbahnhof Arnulf'[:i]}").status_code, 429)
+        for _ in range(10):
+            for path in (f"/api/v1/stops/{STOP}/departures", f"/api/v1/stops/{STOP}/departures?tab=bus",
+                         f"/api/v1/stops/{STOP}/departures/x/stops"):
+                self.assertNotEqual(self.get(path).status_code, 429)
+            self.now[0] += 3
+        for _ in range(8):
+            self.assertNotEqual(self.get(f"/api/v1/stops/{STOP}/departures").status_code, 429)
+        for _ in range(120):
+            self.now[0] += 30
+            self.assertNotEqual(self.get(f"/api/v1/stops/{STOP}/departures").status_code, 429)
+            self.assertNotEqual(self.get(f"/api/v1/stops/{STOP}/departures/x/stops").status_code, 429)
+
+    def test_map_moves(self):
+        size, rate = limits.LIMITS["local"]
+        area = "/api/v1/stops?bbox=9.1,48.7,9.3,48.8"
+        # dragging the map about for a minute, five moves a second at first
+        for i in range(300):
+            self.assertNotEqual(self.get(area).status_code, 429, i)
+            self.now[0] += 0.2 if i < 100 else 0.25
+        for _ in range(size + 5):
+            last = self.get(area).status_code
+        self.assertEqual(last, 429)
+
+    def test_ipv6_counts_by_its_network(self):
+        size, _ = limits.LIMITS["timetable"]
+        board = f"/api/v1/stops/{STOP}/departures"
+        for i in range(size):
+            self.get(board, address=f"2001:db8:1:2::{i + 1:x}")
+        self.assertEqual(self.get(board, address="2001:db8:1:2:ffff::9").status_code, 429)
+        self.assertEqual(self.get(board, address="2001:db8:1:3::1").status_code, 200)
+
+    def test_idle_visitors_are_forgotten(self):
+        for i in range(50):
+            self.get(f"/api/v1/stops/{STOP}/departures", address=f"192.0.2.{i}")
+        self.assertEqual(len(v1.limiter.buckets), 50)
+        self.now[0] += 200      # full again after 2 minutes; forgotten at the next look
+        self.get(f"/api/v1/stops/{STOP}/departures", address="192.0.2.200")
+        self.assertEqual(len(v1.limiter.buckets), 1)
+
+    def test_switched_off(self):
+        app.config["RATE_LIMIT"] = False
+        for _ in range(limits.LIMITS["timetable"][0] + 10):
+            self.assertEqual(self.get(f"/api/v1/stops/{STOP}/departures").status_code, 200)
+
+    def test_visitor_keys(self):
+        self.assertEqual(limits.visitor_key("203.0.113.5"), "203.0.113.5")
+        self.assertEqual(limits.visitor_key("::ffff:203.0.113.5"), "203.0.113.5")
+        self.assertEqual(limits.visitor_key("2001:db8:1:2:3:4:5:6"), "2001:db8:1:2::/64")
+        self.assertEqual(limits.visitor_key(""), "?")
+
+
 class ErrorTest(ApiTestCase):
     def assert_error(self, res, status, code):
         self.assertEqual(res.status_code, status)
@@ -581,6 +682,31 @@ class ErrorTest(ApiTestCase):
         for wrong in ("..", "Stuttgart Hbf", "de:08111:61150", f"{STOP}:2:2"):
             self.assert_error(self.http.get(f"/api/v1/stops/{wrong}/departures"), 404, "unknown_stop")
         self.assertEqual(self.http.get(f"/api/v1/stops/{STOP}/departures").status_code, 200)
+
+    def test_impossible_ids_are_not_sent_to_the_timetable_service(self):
+        asked = []
+        client.get_station = lambda stop_id: asked.append(stop_id) or {}
+        client.get_departures = lambda stop_id, classes=(), **kw: asked.append(stop_id) or {}
+        for wrong in ("..", "Stuttgart Hbf", "de:09162:100", "x" * 3000, "de:08111:6115:1:2"):
+            self.assert_error(self.http.get(f"/api/v1/stops/{wrong}/departures"), 404, "unknown_stop")
+        self.assert_error(self.http.get(f"/api/v1/stops/{STOP}/departures?platform=de:08111:9999:1:1"), 404, "unknown_platform")
+        self.assert_error(self.http.get(f"/api/v1/stops/{STOP}/departures?platform={STOP}:..%2F..%2Fx"), 404, "unknown_platform")
+        self.assertEqual(asked, [])
+
+    def test_known_stop_without_description_is_an_outage(self):
+        # some nights EFA answers every stop with nothing for a while: a stop the
+        # stop database knows is not "unknown" then, the service is not answering
+        original = departures.stop_importance
+        departures.stop_importance = lambda: {STOP: 30.0}
+        try:
+            client.get_station = lambda stop_id: {}
+            self.assert_error(self.http.get(f"/api/v1/stops/{STOP}/departures"), 502, "timetable_unavailable")
+            client.get_station = lambda stop_id: {"locations": [{"id": "de:08125:1000", "name": "Untergruppenbach", "type": "stop"}]}
+            self.assert_error(self.http.get(f"/api/v1/stops/{STOP}/departures"), 502, "timetable_unavailable")
+            # a stop the database does not know is still unknown
+            self.assert_error(self.http.get("/api/v1/stops/de:08111:99999/departures"), 404, "unknown_stop")
+        finally:
+            departures.stop_importance = original
 
     def test_stop_outside_baden_wuerttemberg(self):
         client.get_station = lambda stop_id: {"locations": [{"id": "de:09162:100", "name": "München, Hbf", "type": "stop"}]}

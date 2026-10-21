@@ -421,7 +421,9 @@ async function loadDepartures() {
   if (request !== requestCounter) return;  // the user has moved on
   if (!res.ok) {
     const message = await errorMessage(res, 'Could not load departures.');
-    if (request === requestCounter) showLoadError(message, res.status >= 500);
+    // the service not answering, or too many requests from this connection
+    // (429): both pass, and the next refresh tries again
+    if (request === requestCounter) showLoadError(message, res.status >= 500 || res.status === 429);
     return;
   }
   lastData = await res.json();

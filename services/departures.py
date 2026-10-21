@@ -146,7 +146,7 @@ def trip(stop_id: str, departure_id: str) -> dict:
 
     wanted = parse.decode_departure_id(departure_id)
     # the id says which platform it leaves from; that must be one of this station's
-    if not wanted or not parse.in_baden_wuerttemberg(stop_id) or not (wanted["platform_id"] + ":").startswith(stop_id + ":"):
+    if not wanted or not parse.is_station_id(stop_id) or not (wanted["platform_id"] + ":").startswith(stop_id + ":"):
         raise UnknownDeparture(departure_id)
     data = client.get_departures(stop_id, (), start=wanted["planned"] - timedelta(minutes=1))
     for event in data.get("stopEvents") or []:
@@ -503,11 +503,25 @@ def board(stop_id: str, tab_id: str = "", platform_id: str = "", trains_together
     With `platform_id` the board holds that platform's departures only, see
     `platform_board`. With `trains_together` regional and long-distance
     trains are one mode, "Trains"."""
+    # what can't be a station (or one of its platforms) is answered at once,
+    # without sending it to the timetable service
+    if not parse.is_station_id(stop_id):
+        raise UnknownStop(stop_id)
+    if platform_id and not parse.is_platform_id_of(platform_id, stop_id):
+        raise UnknownPlatform(platform_id)
     station = parse.parse_station(client.get_station(stop_id))
     # EFA resolves an id it doesn't know, or any text, to whatever stop
     # matches loosely, anywhere in Europe ("Stuttgart Hbf", even ".."): only
     # the stop that was asked for counts, and only in Baden-Württemberg
     if not station or station["id"] != stop_id or not parse.in_baden_wuerttemberg(stop_id):
+        # A stop the stop database knows does exist: EFA is having trouble
+        # (some nights it answers every stop with nothing for a while; on 16
+        # October it answered with other stops). Saying the stop doesn't
+        # exist would be wrong; the page says the service isn't answering
+        # and tries again.
+        if stop_id in stop_importance():
+            log.warning("EFA did not describe the known stop %s (%s)", stop_id, station and station["id"])
+            raise client.EfaError(f"no description of the known stop {stop_id}")
         raise UnknownStop(stop_id)
     nearby = [n for n in station["nearby"] if parse.in_baden_wuerttemberg(n["id"])]
     if platform_id:

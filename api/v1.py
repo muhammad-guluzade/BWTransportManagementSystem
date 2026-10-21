@@ -10,17 +10,35 @@ anything that renames or removes a field belongs in a new version.
 """
 from flask import Blueprint, current_app, jsonify, request
 
+from api import limits
 from efa.client import EfaError
 from gtfs.store import StopsNotImported
 from services import departures, stops
 
 bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
+# how often one visitor may ask (api/limits.py); switched off with the app
+# setting RATE_LIMIT = False (the tests that ask a lot on purpose)
+limiter = limits.Limiter()
 
 
 def error(status: int, code: str, message: str):
     """Every error has the same shape: a `code` for programs, a `message`
     for people."""
     return jsonify({"error": {"code": code, "message": message}}), status
+
+
+@bp.before_request
+def take_turns():
+    kind = limits.KIND_OF_ENDPOINT.get(request.endpoint)
+    if not kind or not current_app.config.get("RATE_LIMIT", True):
+        return None
+    wait = limiter.wait(request.remote_addr or "", kind)
+    if not wait:
+        return None
+    response, status = error(429, "too_many_requests",
+                             "Too many requests from your connection. Please wait a moment.")
+    response.headers["Retry-After"] = limits.retry_after(wait)
+    return response, status
 
 
 @bp.errorhandler(EfaError)

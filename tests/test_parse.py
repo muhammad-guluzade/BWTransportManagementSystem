@@ -404,6 +404,23 @@ class StopSearchTest(unittest.TestCase):
         self.assertFalse(parse.in_baden_wuerttemberg("6906508:$Z1"))
 
 
+class IdShapeTest(unittest.TestCase):
+    def test_station_ids(self):
+        for good in ("de:08111:6115", "de:08118:nvbw_bus_11198", "de:08221:1144"):
+            self.assertTrue(parse.is_station_id(good), good)
+        for bad in ("", "..", "Stuttgart Hbf", "de:09162:100", "de:08111", "de:08111:", "de:08111:6115:1:2",
+                    "de:0811:6115", "de:08111:61 15", "de:08111:../x", "x" * 5000, "de:08111:" + "1" * 41):
+            self.assertFalse(parse.is_station_id(bad), bad)
+
+    def test_platform_ids(self):
+        stop = "de:08111:6115"
+        for good in (stop, stop + ":1:2", stop + ":0:Hp. 2", stop + ":2:RiN/O", stop + ":0:>Berw"):
+            self.assertTrue(parse.is_platform_id_of(good, stop), good)
+        for bad in ("de:08111:6116:1:1", "de:08111:61150", stop + ":", stop + ":../../etc", stop + ":a\\b",
+                    stop + ":1\x00", stop + ":" + "1" * 41):
+            self.assertFalse(parse.is_platform_id_of(bad, stop), bad)
+
+
 class StationTest(unittest.TestCase):
     # as returned for Stuttgart Hbf (oben)
     RESPONSE = {
