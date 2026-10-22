@@ -104,6 +104,133 @@ class ApiTestCase(unittest.TestCase):
         client.get_station, client.get_departures, client.find_stops = self.originals
 
 
+class CacheMemoryTest(unittest.TestCase):
+    """Big departure lists (5-12 MB each once read) are kept only for the newest
+    few, and answers whose time is up are cleared out soon: the server must not
+    run out of memory with many visitors at many stops (22 October 2026)."""
+
+    def setUp(self):
+        self.real_get, self.real_clock = client._session.get, client.time.monotonic
+        client._cache.clear()
+        client._big.clear()
+        self.now = [1000.0]
+        client.time.monotonic = lambda: self.now[0]
+        self.asked = []
+
+        class Answer:
+            def __init__(self, data):
+                self.data, self.encoding = data, None
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self.data
+
+        def fake_get(url, params=None, timeout=None):
+            self.asked.append(params["stop"])
+            size = 100 if params["stop"].startswith("big") else 1
+            return Answer({"stopEvents": [{"n": i} for i in range(size)]})
+        client._session.get = fake_get
+
+    def tearDown(self):
+        client._session.get, client.time.monotonic = self.real_get, self.real_clock
+        client._cache.clear()
+        client._big.clear()
+
+    def get(self, stop, ttl=30):
+        return client.efa_get("XML_DM_REQUEST", {"stop": stop}, ttl=ttl)
+
+    def test_only_the_newest_big_answers_stay(self):
+        for i in range(client._CACHE_MAX_BIG + 5):
+            self.get(f"big{i}")
+        for i in range(20):
+            self.get(f"small{i}", ttl=3600)
+        self.assertEqual(len(client._big), client._CACHE_MAX_BIG)
+        self.assertEqual(sum(client._is_big(data) for _, data in client._cache.values()), client._CACHE_MAX_BIG)
+        self.asked.clear()
+        self.get("big0")                                   # the oldest was let go: asked again
+        self.get(f"big{client._CACHE_MAX_BIG + 4}")        # the newest is still known
+        for i in range(20):
+            self.get(f"small{i}", ttl=3600)                # small ones are not pushed out by big ones
+        self.assertEqual(self.asked, ["big0"])
+
+    def test_answers_whose_time_is_up_are_cleared_out(self):
+        for i in range(10):
+            self.get(f"big{i}")
+        self.get("small", ttl=3600)
+        self.now[0] += 31 + client._SWEEP_EVERY_SECONDS
+        self.get("big-new")                                # any new answer clears out the old ones
+        self.assertEqual(sorted(k[1][0][1] for k in client._cache), ["big-new", "small"])
+        self.assertEqual(list(k[1][0][1] for k in client._big), ["big-new"])
+
+    def test_a_refreshed_answer_counts_as_new(self):
+        for i in range(client._CACHE_MAX_BIG):
+            self.get(f"big{i}")
+        self.now[0] += 31
+        self.get("big0")                                   # time was up: asked again, now the newest
+        self.get("big-extra")                              # pushes out big1, not the fresh big0
+        self.asked.clear()
+        self.now[0] += 1
+        self.get("big0")
+        self.assertEqual(self.asked, [])
+
+
+class AnsweringTest(unittest.TestCase):
+    """client.answering(): is EFA answering normally? (a well-known station,
+    asked at most once a minute)"""
+
+    def setUp(self):
+        self.real_get, self.real_clock = client._session.get, client.time.monotonic
+        self.now = [5000.0]
+        client.time.monotonic = lambda: self.now[0]
+        client._answering[:] = [float("-inf"), True]
+        self.asked = 0
+        self.reply = None
+
+        class Answer:
+            def __init__(self, data):
+                self.data, self.encoding = data, None
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self.data
+
+        def fake_get(url, params=None, timeout=None):
+            self.asked += 1
+            if isinstance(self.reply, Exception):
+                raise self.reply
+            return Answer(self.reply)
+        client._session.get = fake_get
+
+    def tearDown(self):
+        client._session.get, client.time.monotonic = self.real_get, self.real_clock
+        client._answering[:] = [float("-inf"), True]
+
+    def test_described_means_answering(self):
+        self.reply = {"locations": [{"id": client.REFERENCE_STOP, "name": "Stuttgart, Hauptbahnhof", "type": "stop"}]}
+        self.assertTrue(client.answering())
+
+    def test_nothing_or_another_stop_or_no_connection_means_not(self):
+        for reply in ({}, {"locations": [{"id": "de:08125:1000", "name": "Untergruppenbach", "type": "stop"}]},
+                      client.requests.ConnectionError("down")):
+            client._answering[:] = [float("-inf"), True]
+            self.reply = reply
+            self.assertFalse(client.answering(), reply)
+
+    def test_asked_at_most_once_a_minute(self):
+        self.reply = {}
+        self.assertFalse(client.answering())
+        self.reply = {"locations": [{"id": client.REFERENCE_STOP, "name": "Stuttgart, Hauptbahnhof", "type": "stop"}]}
+        self.now[0] += client.ANSWERING_TTL - 1
+        self.assertFalse(client.answering())       # remembered
+        self.now[0] += 2
+        self.assertTrue(client.answering())        # asked again
+        self.assertEqual(self.asked, 2)
+
+
 class StationCacheTest(unittest.TestCase):
     """A station's description is remembered for hours, so only if it is the
     station asked for (16 October 2026: EFA, in trouble, answered with other stops)."""
@@ -696,17 +823,23 @@ class ErrorTest(ApiTestCase):
     def test_known_stop_without_description_is_an_outage(self):
         # some nights EFA answers every stop with nothing for a while: a stop the
         # stop database knows is not "unknown" then, the service is not answering
-        original = departures.stop_importance
+        original, real_answering = departures.stop_importance, client.answering
         departures.stop_importance = lambda: {STOP: 30.0}
         try:
+            client.answering = lambda: False          # the well-known station isn't described either
             client.get_station = lambda stop_id: {}
             self.assert_error(self.http.get(f"/api/v1/stops/{STOP}/departures"), 502, "timetable_unavailable")
             client.get_station = lambda stop_id: {"locations": [{"id": "de:08125:1000", "name": "Untergruppenbach", "type": "stop"}]}
             self.assert_error(self.http.get(f"/api/v1/stops/{STOP}/departures"), 502, "timetable_unavailable")
             # a stop the database does not know is still unknown
             self.assert_error(self.http.get("/api/v1/stops/de:08111:99999/departures"), 404, "unknown_stop")
+            # EFA answers normally, just not for this stop: it really doesn't know it
+            # (de:08117:10121 "Sparwiesen Grundschule" is in NVBW's list, not in EFA)
+            client.answering = lambda: True
+            client.get_station = lambda stop_id: {}
+            self.assert_error(self.http.get(f"/api/v1/stops/{STOP}/departures"), 404, "unknown_stop")
         finally:
-            departures.stop_importance = original
+            departures.stop_importance, client.answering = original, real_answering
 
     def test_stop_outside_baden_wuerttemberg(self):
         client.get_station = lambda stop_id: {"locations": [{"id": "de:09162:100", "name": "München, Hbf", "type": "stop"}]}

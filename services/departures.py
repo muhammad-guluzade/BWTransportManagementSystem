@@ -514,12 +514,13 @@ def board(stop_id: str, tab_id: str = "", platform_id: str = "", trains_together
     # matches loosely, anywhere in Europe ("Stuttgart Hbf", even ".."): only
     # the stop that was asked for counts, and only in Baden-Württemberg
     if not station or station["id"] != stop_id or not parse.in_baden_wuerttemberg(stop_id):
-        # A stop the stop database knows does exist: EFA is having trouble
-        # (some nights it answers every stop with nothing for a while; on 16
-        # October it answered with other stops). Saying the stop doesn't
-        # exist would be wrong; the page says the service isn't answering
-        # and tries again.
-        if stop_id in stop_importance():
+        # A stop the stop database knows: either EFA is having trouble (some
+        # nights it answers every stop with nothing for a while; on 16 October
+        # it answered with other stops), then the page says the service isn't
+        # answering and tries again; or EFA really doesn't know this one stop
+        # (a few in NVBW's list, e.g. de:08117:10121), which a well-known
+        # station tells apart: EFA describes that one normally.
+        if stop_id in stop_importance() and not client.answering():
             log.warning("EFA did not describe the known stop %s (%s)", stop_id, station and station["id"])
             raise client.EfaError(f"no description of the known stop {stop_id}")
         raise UnknownStop(stop_id)

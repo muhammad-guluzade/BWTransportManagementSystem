@@ -7,9 +7,11 @@ change without notice. Run debug_efa.py if anything here misbehaves.
 """
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime
 
 import requests
+from requests.adapters import HTTPAdapter
 
 from efa.localtime import to_local
 
@@ -27,10 +29,50 @@ TAB_CHECK_TTL = 3600
 # (TCP + TLS handshake) for every request
 _session = requests.Session()
 _session.headers.update(HEADERS)
+# up to this many connections are kept for reuse: one per worker of the server
+# (serve.py) and some more; with 10, busy moments threw connections away
+_session.mount("https://", HTTPAdapter(pool_connections=4, pool_maxsize=32))
 
 _CACHE_MAX_ENTRIES = 500
 _cache = {}  # key -> (expires_at, data)
 _cache_lock = threading.Lock()
+# A list of departures with every trip's stops is big: 1.5-5 MB of text,
+# 5-12 MB once read (measured 22 October 2026). At most this many are kept,
+# the newest; the small answers (stations, tab checks) don't count. Without
+# the cap, boards of 140 different stops took the server's app past 1 GB;
+# with 60, 150 stops peaked at 620 MB, and 60 visitors were as quick as
+# without a cap (30 was too few: answers were fetched and read again).
+_CACHE_MAX_BIG = 60
+_BIG_FROM_DEPARTURES = 10
+_big = OrderedDict()  # keys of the big answers in _cache, oldest first
+# answers whose time is up are cleared out at most this often
+_SWEEP_EVERY_SECONDS = 5
+_last_sweep = [0.0]
+
+
+def _is_big(data) -> bool:
+    return isinstance(data, dict) and len(data.get("stopEvents") or []) > _BIG_FROM_DEPARTURES
+
+
+def _remember(key, data, expires, now):
+    """Keep an answer until `expires` (under _cache_lock): expired answers are
+    cleared out every few seconds, and of the big ones only the newest
+    _CACHE_MAX_BIG stay."""
+    if now - _last_sweep[0] >= _SWEEP_EVERY_SECONDS or len(_cache) >= _CACHE_MAX_ENTRIES:
+        _last_sweep[0] = now
+        for k in [k for k, (until, _) in _cache.items() if until <= now]:
+            del _cache[k]
+            _big.pop(k, None)
+        if len(_cache) >= _CACHE_MAX_ENTRIES:
+            _cache.clear()
+            _big.clear()
+    _cache[key] = (expires, data)
+    _big.pop(key, None)
+    if _is_big(data):
+        _big[key] = None
+        while len(_big) > _CACHE_MAX_BIG:
+            oldest, _ = _big.popitem(last=False)
+            _cache.pop(oldest, None)
 
 
 class EfaError(Exception):
@@ -61,12 +103,7 @@ def efa_get(endpoint: str, params: dict, ttl: int = 0, keep=None) -> dict:
 
     if ttl and (keep is None or keep(data)):
         with _cache_lock:
-            if len(_cache) >= _CACHE_MAX_ENTRIES:
-                for k in [k for k, (expires, _) in _cache.items() if expires <= now]:
-                    del _cache[k]
-                if len(_cache) >= _CACHE_MAX_ENTRIES:
-                    _cache.clear()
-            _cache[key] = (now + ttl, data)
+            _remember(key, data, now + ttl, time.monotonic())
     return data
 
 
@@ -86,6 +123,20 @@ def find_stops(query: str) -> dict:
     )
 
 
+def _station_params(stop_id: str) -> dict:
+    # the lightest departure request there is: only the station description
+    # in `locations` is used
+    return {
+        "outputFormat": "rapidJSON",
+        "type_dm": "stop",
+        "name_dm": stop_id,
+        "mode": "direct",
+        "limit": 1,
+        "depType": "stopEvents",
+        "coordOutputFormat": "WGS84[dd.ddddd]",
+    }
+
+
 def get_station(stop_id: str) -> dict:
     """Raw response describing a station: its name, the transport types
     that stop there, and the stations EFA links to it (e.g. Stuttgart Hbf
@@ -93,23 +144,34 @@ def get_station(stop_id: str) -> dict:
     'de:08111:115' or EFA's internal one."""
     return efa_get(
         "XML_DM_REQUEST",
-        {
-            # the lightest departure request there is: only the station
-            # description in `locations` is used
-            "outputFormat": "rapidJSON",
-            "type_dm": "stop",
-            "name_dm": stop_id,
-            "mode": "direct",
-            "limit": 1,
-            "depType": "stopEvents",
-            "coordOutputFormat": "WGS84[dd.ddddd]",
-        },
+        _station_params(stop_id),
         ttl=STATION_TTL,
         # Remembered for hours, so only if it really is this station: when EFA
         # has trouble it can answer with some other stop (seen on 16 October
         # 2026), and that must not hide the station for the next six hours.
         keep=lambda data: describes(data, stop_id),
     )
+
+
+# A station EFA always knows: if EFA describes it, EFA is answering normally.
+REFERENCE_STOP = "de:08111:6115"   # Stuttgart Hauptbahnhof
+ANSWERING_TTL = 60
+_answering = [float("-inf"), True]   # [when last asked, answer]
+
+
+def answering() -> bool:
+    """Is EFA answering normally right now? It is asked for a well-known
+    station, at most once a minute. Tells a stop that EFA really doesn't know
+    (a few in NVBW's list, e.g. de:08117:10121) from an EFA outage."""
+    now = time.monotonic()
+    if now - _answering[0] < ANSWERING_TTL:
+        return _answering[1]
+    try:
+        ok = describes(efa_get("XML_DM_REQUEST", _station_params(REFERENCE_STOP)), REFERENCE_STOP)
+    except EfaError:
+        ok = False
+    _answering[:] = [now, ok]
+    return ok
 
 
 def describes(data: dict, stop_id: str) -> bool:
