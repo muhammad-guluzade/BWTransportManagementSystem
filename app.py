@@ -15,7 +15,7 @@ import os
 import threading
 import time
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request, send_from_directory
 
 from api import v1
 from gtfs import store
@@ -135,6 +135,13 @@ def index(stop_id=None):
     # the page is asked for anew each time, so its files' versions are current
     response.headers["Cache-Control"] = "no-cache"
     return response
+
+
+@app.route("/favicon.ico")
+def favicon():
+    """Browsers and other programs ask for the tab icon here, whatever the
+    page says."""
+    return send_from_directory(os.path.join(app.static_folder, "icons"), "favicon.ico", mimetype="image/x-icon")
 
 
 @app.route("/robots.txt")

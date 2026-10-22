@@ -69,6 +69,14 @@ const longDateFormat = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 
 const clockFormat = new Intl.DateTimeFormat('de-DE', {
   hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Europe/Berlin',
 });
+// the device's own clock, whatever time zone it is set to
+const deviceClockFormat = new Intl.DateTimeFormat('de-DE', { hour: '2-digit', minute: '2-digit' });
+// All times on the page are German time. A device whose clock shows another
+// time (a visitor abroad, a phone still on home time) is told so; in Germany
+// (and wherever the clocks show the same time) nothing is added.
+function germanTimeNote(now) {
+  return timeFormat.format(now) === deviceClockFormat.format(now) ? '' : ' · German time';
+}
 // a clock time alone is ambiguous from this many minutes ahead on
 const SHOW_DAY_FROM_MINUTES = 12 * 60;
 
@@ -449,7 +457,8 @@ async function loadDepartures() {
     const found = window.mine.findPlatform(onlyPlatform, lastData);
     if (found) { markPlatform(found[0], found[1], 'favourite'); render(); }
   }
-  status.textContent = 'Updated ' + clockFormat.format(new Date());
+  const now = new Date();
+  status.textContent = 'Updated ' + clockFormat.format(now) + germanTimeNote(now);
 }
 
 // A failed refresh keeps the board that is shown; a board that was still

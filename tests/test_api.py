@@ -772,6 +772,16 @@ class PageTest(unittest.TestCase):
         self.assertLess(page.index("js/mine.js"), page.index("js/departures.js"))   # the board uses the favourites
         self.assertLess(page.index("js/departures.js"), page.index("js/favourites.js"))   # the window opens through the board
 
+    def test_tab_icon(self):
+        page = self.http.get("/").get_data(as_text=True)
+        for name in ("icons/favicon.svg", "icons/favicon-32.png", "icons/apple-touch-icon.png"):
+            self.assertRegex(page, rf'/static/{name}\?v=\d+"', name)
+            with self.http.get(f"/static/{name}") as res:
+                self.assertEqual(res.status_code, 200, name)
+        with self.http.get("/favicon.ico") as res:
+            self.assertEqual((res.status_code, res.mimetype), (200, "image/x-icon"))
+            self.assertEqual(res.data[:4], b"\x00\x00\x01\x00")   # an icon file
+
     def test_versioned_files_are_kept_long(self):
         page = self.http.get("/").get_data(as_text=True)
         versioned = page[page.index("/static/js/map.js"):].split('"')[0]

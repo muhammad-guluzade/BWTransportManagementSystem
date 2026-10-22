@@ -9,6 +9,10 @@
 <meta name="description" content="Live departures for every stop in Baden-Württemberg: trains, S-Bahn, U-Bahn, trams and buses, by platform, on a map.">
 <!-- the version of this page and its files: an API answer naming another one means an update (update.js) -->
 <meta name="app-version" content="{{ version }}">
+<!-- the tab icon: the German bus stop sign (Zeichen 224, an official sign: public domain) -->
+<link rel="icon" href="{{ url_for('static', filename='icons/favicon.svg') }}" type="image/svg+xml">
+<link rel="icon" href="{{ url_for('static', filename='icons/favicon-32.png') }}" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
 <!-- the theme chosen in the menu (menu.js), applied before anything is drawn; none chosen: the device's -->
 <script>
   try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) { /* no storage: the device's theme */ }
