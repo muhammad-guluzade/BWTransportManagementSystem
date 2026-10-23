@@ -1,0 +1,28 @@
+[Unit]
+Description=BW Departures (Waitress, serve.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=bw
+Group=bw
+WorkingDirectory=/srv/bw/app
+ExecStart=/srv/bw/venv/bin/python serve.py
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+# the app may change nothing on the system but its stop data
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+ReadWritePaths=/srv/bw/app/data
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

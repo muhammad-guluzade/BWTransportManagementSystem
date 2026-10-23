@@ -1,0 +1,18 @@
+# BW Departures: https for the public name, everything passed to the app
+# (Waitress on 127.0.0.1:8000, serve.py). Caddy gets and renews the
+# certificate itself and sends http:// visitors on to https://.
+bw-departures.duckdns.org {
+	encode zstd gzip
+	# while the app restarts (an update), visitors wait a moment instead of getting an error
+	reverse_proxy 127.0.0.1:8000 {
+		lb_try_duration 10s
+		lb_try_interval 250ms
+	}
+	header {
+		# do not name the server programs
+		-Server
+		-Via
+		# browsers that were here once use https only (a year; set 2026-10-22 after G4)
+		Strict-Transport-Security "max-age=31536000"
+	}
+}

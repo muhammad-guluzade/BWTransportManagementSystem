@@ -1,0 +1,3 @@
+// BW Departures: restart at night when an update needs it (the app starts by itself)
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "04:30";

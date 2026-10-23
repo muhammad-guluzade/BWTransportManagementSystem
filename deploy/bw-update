@@ -1,0 +1,139 @@
+#!/bin/bash
+# BW Departures: update the app from GitHub, or go back to the version before.
+#
+#   bw-update            fetch the newest version (main), test it, switch, check
+#   bw-update rollback   go back to the version that ran before the last switch
+#   bw-update status     which version runs, and whether the site answers
+#
+# Safety: the unit tests run on the new code BEFORE anything changes; after
+# the switch the site must answer, otherwise the version before is put back.
+# Visitors don't notice the restart (Caddy waits for the app).
+set -euo pipefail
+
+APP=/srv/bw/app
+VENV=/srv/bw/venv
+PREVIOUS=/srv/bw/previous-version      # the version that ran before the last switch
+LOG=/srv/bw/update.log
+HEALTH=${BW_HEALTH_URL:-http://127.0.0.1:8000}           # (tests point it elsewhere)
+TEST_COMMAND=${BW_TEST_COMMAND:-"$VENV/bin/python -B -m unittest -q"}
+
+if [ "$(id -u)" != 0 ]; then echo "Run it as root (you are when you log in as root)."; exit 1; fi
+
+as_bw() { sudo -u bw "$@"; }
+git_app() { as_bw git -C "$APP" "$@"; }
+note() { echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >> "$LOG"; }
+version_of() { git_app log -1 --format='%h %s (%cd)' --date=format:'%d.%m.%Y' "$1"; }
+
+healthy() {
+    # the page and the API both answer (up to 20 s: the app needs a moment to start)
+    # (for testing the way back: BW_PRETEND_BROKEN=<version> makes that version fail the check)
+    if [ -n "${BW_PRETEND_BROKEN:-}" ] && [ "$(git_app rev-parse HEAD)" = "$(git_app rev-parse "$BW_PRETEND_BROKEN")" ]; then
+        return 1
+    fi
+    for _ in $(seq 1 20); do
+        if curl -fsS -m 5 "$HEALTH/api/v1/" >/dev/null 2>&1 && curl -fsS -m 5 "$HEALTH/" 2>/dev/null | grep -q 'name="app-version"'; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+libraries_for() {
+    # install the libraries a version needs, if they differ from what runs now
+    local target=$1 now=$2
+    if [ "$(git_app rev-parse "$now:requirements.txt")" != "$(git_app rev-parse "$target:requirements.txt")" ]; then
+        echo "  libraries changed: installing them ..."
+        git_app show "$target:requirements.txt" > /tmp/bw-requirements.txt
+        as_bw "$VENV/bin/pip" install -q -r /tmp/bw-requirements.txt
+        rm -f /tmp/bw-requirements.txt
+    fi
+}
+
+switch_to() {
+    # run the given version: its code, its libraries, restart, check
+    local target=$1 now
+    now=$(git_app rev-parse HEAD)
+    libraries_for "$target" "$now"
+    git_app reset -q --hard "$target"
+    systemctl restart bw-departures
+    healthy
+}
+
+status() {
+    echo "Running: $(version_of HEAD)"
+    echo "Service: $(systemctl is-active bw-departures) since $(systemctl show -p ActiveEnterTimestamp --value bw-departures)"
+    if healthy; then echo "Site:    answers"; else echo "Site:    NOT ANSWERING"; fi
+    if [ -s "$PREVIOUS" ]; then echo "Before:  $(version_of "$(cat "$PREVIOUS")")  (bw-update rollback goes back to it)"; fi
+}
+
+update() {
+    git_app fetch -q origin main
+    local now new
+    now=$(git_app rev-parse HEAD)
+    new=$(git_app rev-parse origin/main)
+    if [ "$now" = "$new" ]; then
+        echo "Already the newest version: $(version_of HEAD)"
+        return 0
+    fi
+    echo "Running now: $(version_of "$now")"
+    echo "New on GitHub:"
+    git_app log --format='  %h %s' "$now..$new"
+    git_app diff --stat "$now" "$new" | tail -1 | sed 's/^/  /'
+
+    echo "Testing the new version before switching ..."
+    local check=/tmp/bw-check
+    rm -rf "$check"; git_app worktree prune
+    git_app worktree add -q --detach "$check" "$new"
+    libraries_for "$new" "$now"
+    if ! (cd "$check" && as_bw $TEST_COMMAND > /tmp/bw-test-output.txt 2>&1); then
+        tail -15 /tmp/bw-test-output.txt
+        git_app worktree remove --force "$check"
+        libraries_for "$now" "$new"       # the libraries of the version that keeps running
+        note "update to $new REFUSED: tests failed"
+        echo "Tests FAILED: nothing was changed, the site keeps running $(version_of "$now")."
+        exit 1
+    fi
+    git_app worktree remove --force "$check"
+    echo "  tests passed: $(grep -oE 'Ran [0-9]+ tests' /tmp/bw-test-output.txt || echo ok)"
+
+    echo "Switching ..."
+    echo "$now" > "$PREVIOUS"
+    if switch_to "$new"; then
+        note "updated $now -> $new"
+        echo "Done. Running: $(version_of HEAD)"
+    else
+        echo "The site does NOT answer with the new version: going back ..."
+        if switch_to "$now"; then
+            note "update to $new FAILED (site did not answer); back on $now"
+            echo "Back on $(version_of HEAD); the site answers again. The new version needs a look."
+        else
+            note "update to $new FAILED and going back failed too"
+            echo "Going back did not help either: the site does not answer. Look at: journalctl -u bw-departures -n 50"
+        fi
+        exit 1
+    fi
+}
+
+rollback() {
+    if [ ! -s "$PREVIOUS" ]; then echo "No earlier version is known yet (no update was made with bw-update)."; exit 1; fi
+    local back now
+    back=$(cat "$PREVIOUS"); now=$(git_app rev-parse HEAD)
+    echo "Going back from $(version_of "$now")"
+    echo "             to $(version_of "$back") ..."
+    echo "$now" > "$PREVIOUS"
+    if switch_to "$back"; then
+        note "rollback $now -> $back"
+        echo "Done. Running: $(version_of HEAD)  (bw-update brings the newest again)"
+    else
+        note "rollback to $back: the site did not answer"
+        echo "The site does not answer. Look at: journalctl -u bw-departures -n 50"; exit 1
+    fi
+}
+
+case "${1:-update}" in
+    update) update ;;
+    rollback) rollback ;;
+    status) status ;;
+    *) echo "Use: bw-update | bw-update rollback | bw-update status"; exit 1 ;;
+esac

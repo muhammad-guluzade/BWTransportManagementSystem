@@ -1,0 +1,10 @@
+[Unit]
+Description=BW Departures: new stop data every week (NVBW publishes on the 1st and 3rd Tuesday)
+
+[Timer]
+OnCalendar=Wed *-*-* 04:00
+RandomizedDelaySec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
