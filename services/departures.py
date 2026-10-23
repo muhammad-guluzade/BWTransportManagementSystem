@@ -204,16 +204,47 @@ def dedupe(departures: list) -> list:
     # of 4). A numberless train is that copy when a numbered one leaves at the
     # same time for the same destination: the same name, or (the names are
     # spelt differently: "München Hbf" / "München Hauptbahnhof") the same last
-    # station. Then only the numbered one stays. (A train whose label simply
-    # has no number, like "SAB", has no such twin.)
+    # station, or towards the same next stop (23 October 2026: DB's TGV 9574
+    # "to Strasbourg", the French copy "to Paris Est", both via Karlsruhe).
+    # Then only the numbered one stays, DB's (its platform is the right one),
+    # with the copy's route if that goes on further: DB Navigator showed that
+    # TGV 9574 to Paris Est. (A train whose label simply has no number, like
+    # "SAB", has no such twin.)
     numbered = [dep for dep in kept if dep["mode"] in TRAIN_MODES and re.search(r"\d", dep["line"])]
 
-    def has_twin(dep):
-        return any(other["planned"] == dep["planned"]
-                   and (other["destination"] == dep["destination"]
-                        or (dep.get("last_station") and other.get("last_station") == dep["last_station"]))
-                   for other in numbered)
-    return [dep for dep in kept if not (dep["mode"] in TRAIN_MODES and not re.search(r"\d", dep["line"]) and has_twin(dep))]
+    def twin_of(dep):
+        return next((other for other in numbered
+                     if other["planned"] == dep["planned"]
+                     and (other["destination"] == dep["destination"]
+                          or (dep.get("last_station") and other.get("last_station") == dep["last_station"])
+                          or (dep.get("next_stop") and other.get("next_stop") == dep["next_stop"]))), None)
+    shown = []
+    for dep in kept:
+        twin = twin_of(dep) if dep["mode"] in TRAIN_MODES and not re.search(r"\d", dep["line"]) else None
+        if twin is None:
+            shown.append(dep)
+        else:
+            take_longer_route(twin, dep)
+    return shown
+
+
+def take_longer_route(kept: dict, copy: dict) -> None:
+    """DB's row of a train stays; when the other timetable's copy of it goes on
+    further along the same stops (DB's ends at Strasbourg, the copy goes on to
+    Paris), the row takes the copy's destination, via stops and stop list."""
+    if not kept.get("id") or not copy.get("id"):
+        return
+    with _trips_lock:
+        mine, theirs = _trips.get(kept["id"]), _trips.get(copy["id"])
+    if not mine or not theirs:
+        return
+    stops = lambda trip: [stop.get("id") or stop.get("name") for stop in trip["onward"]]
+    short, long = stops(mine[1]), stops(theirs[1])
+    if len(long) <= len(short) or long[:len(short)] != short:
+        return
+    kept.update(destination=copy["destination"], via=copy["via"], last_station=copy.get("last_station"),
+                destination_full=copy.get("destination_full"))
+    remember_trip({**mine[1], "destination": copy["destination"], "onward": theirs[1]["onward"]})
 
 
 def plain(name: str) -> str:

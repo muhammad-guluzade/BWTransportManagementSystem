@@ -858,6 +858,41 @@ class SecondTimetableTest(unittest.TestCase):
         unknown = {**copy, "last_station": None}
         self.assertEqual(dedupe([unknown, {**tgv, "last_station": None}]), [unknown, {**tgv, "last_station": None}])
 
+    def test_the_numberless_copy_to_another_destination_goes_and_gives_its_longer_route(self):
+        # Stuttgart Hbf, 23 October 2026: DB's TGV 9574 "to Strasbourg" (platform 4), the
+        # French copy "to Paris Est" (platform 10), same minute, both on to Karlsruhe first;
+        # DB Navigator: TGV 9574 to Paris Est from platform 4 (the user's choice B)
+        from services import departures
+        departures._trips.clear()
+        stop = lambda sid, name: {"id": sid, "name": name}
+        karlsruhe, strasbourg, paris = stop("de:08212:90", "Karlsruhe Hbf"), stop("fr:1", "Strasbourg"), stop("fr:2", "Paris Est")
+        tgv = {**self.dep(line="TGV 9574", platform="4", destination="Strasbourg", mode="Long-distance train"),
+               "id": "tgv", "next_stop": "Karlsruhe Hbf", "via": ["Karlsruhe Hbf"], "last_station": "fr:1", "destination_full": "Strasbourg"}
+        copy = {**self.dep(line="Zug", platform="10", destination="Paris Est", mode="Regional train"),
+                "id": "zug", "next_stop": "Karlsruhe Hbf", "via": ["Karlsruhe Hbf", "Strasbourg"], "last_station": "fr:2",
+                "destination_full": "Paris Est"}
+        departures.remember_trip({"id": "tgv", "line": "TGV 9574", "destination": "Strasbourg", "here": {"id": "de:08111:6115"},
+                                  "previous": [], "onward": [karlsruhe, strasbourg]})
+        departures.remember_trip({"id": "zug", "line": "Zug", "destination": "Paris Est", "here": {"id": "de:08111:6115"},
+                                  "previous": [], "onward": [karlsruhe, strasbourg, paris]})
+        try:
+            shown = departures.dedupe([copy, dict(tgv)])
+            self.assertEqual([(d["line"], d["platform"], d["destination"], d["via"]) for d in shown],
+                             [("TGV 9574", "Platform 4", "Paris Est", ["Karlsruhe Hbf", "Strasbourg"])])
+            self.assertEqual(departures.trip("de:08111:6115", "tgv")["onward"], [karlsruhe, strasbourg, paris])
+            # a copy whose route is not the same one going further: DB's row stays as it is
+            departures.remember_trip({"id": "zug", "line": "Zug", "destination": "Paris Est", "here": {"id": "de:08111:6115"},
+                                      "previous": [], "onward": [karlsruhe, paris]})
+            departures.remember_trip({"id": "tgv", "line": "TGV 9574", "destination": "Strasbourg", "here": {"id": "de:08111:6115"},
+                                      "previous": [], "onward": [karlsruhe, strasbourg]})
+            shown = departures.dedupe([copy, dict(tgv)])
+            self.assertEqual([(d["line"], d["destination"]) for d in shown], [("TGV 9574", "Strasbourg")])
+            # the same minute but another way out: another train, both stay
+            other = {**copy, "next_stop": "Ludwigsburg", "last_station": "de:08118:7402", "destination": "Heilbronn"}
+            self.assertEqual(len(departures.dedupe([other, dict(tgv)])), 2)
+        finally:
+            departures._trips.clear()
+
     def test_a_train_ending_here_is_no_departure(self):
         from services.departures import departing, ends_here
         station = {"id": "de:08111:6115", "name": "Stuttgart, Hauptbahnhof"}
