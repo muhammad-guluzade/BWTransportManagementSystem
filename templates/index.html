@@ -57,6 +57,13 @@
       <button type="button" id="sheet-map">Map</button>
       <div id="station"></div>
       <div id="peek"></div>
+      <!-- the time the departures start from (when.js): now, or a chosen date and time -->
+      <div id="when-bar" role="group" aria-label="Departure time">
+        <button type="button" id="when-earlier" aria-label="One hour earlier">&#x2039;</button>
+        <button type="button" id="when-chip" aria-haspopup="dialog" aria-controls="when-window">Now</button>
+        <button type="button" id="when-reset" aria-label="Back to now" hidden>&#x2715;</button>
+        <button type="button" id="when-later" aria-label="One hour later">&#x203A;</button>
+      </div>
       <div id="status">Search a stop or tap one on the map.</div>
     </div>
     <div id="board"></div>
@@ -79,6 +86,21 @@
     </div>
     <input type="search" id="favourites-filter" placeholder="Search your favourites" autocomplete="off" aria-label="Search your favourites" hidden>
     <div id="favourites-list" role="list"></div>
+  </div>
+</div>
+
+<!-- the departure time (when.js): like the settings, over a blurred page -->
+<div id="when-window" role="dialog" aria-modal="true" aria-labelledby="when-title" hidden>
+  <div class="settings-card when-card">
+    <div class="settings-top">
+      <h2 id="when-title">Departures from</h2>
+      <button type="button" id="when-close" aria-label="Close">&#x2715;</button>
+    </div>
+    <button type="button" id="when-now">Now</button>
+    <label id="when-label" for="when-input">Or choose a date and time <span id="when-zone" hidden>(German time)</span></label>
+    <input type="datetime-local" id="when-input" step="60">
+    <p class="settings-note" id="when-range"></p>
+    <button type="button" id="when-show">Show departures</button>
   </div>
 </div>
 
@@ -131,6 +153,7 @@
 <script src="{{ url_for('static', filename='js/menu.js') }}"></script>
 <script src="{{ url_for('static', filename='js/update.js') }}"></script>
 <script src="{{ url_for('static', filename='js/mine.js') }}"></script>
+<script src="{{ url_for('static', filename='js/when.js') }}"></script>
 <script src="{{ url_for('static', filename='js/departures.js') }}"></script>
 <script src="{{ url_for('static', filename='js/favourites.js') }}"></script>
 <script src="{{ url_for('static', filename='js/sheet.js') }}"></script>

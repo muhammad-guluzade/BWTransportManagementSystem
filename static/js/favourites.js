@@ -30,7 +30,7 @@
   const fold = text => text.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'ss');
 
   const detailOf = f => (f.platform ? `${f.platform.name} · ${f.platform.modeName}` : 'Stop');
-  const boardAddress = f => `/api/v1/stops/${encodeURIComponent(f.stop.id)}/departures?tab=${encodeURIComponent(f.platform ? f.platform.tab || '' : '')}&trains=together`;
+  const boardAddress = f => `/api/v1/stops/${encodeURIComponent(f.stop.id)}/departures?tab=${encodeURIComponent(f.platform ? f.platform.tab || '' : '')}&trains=together${window.when.param()}`;
 
   function isOpen() {
     return !win.hidden;

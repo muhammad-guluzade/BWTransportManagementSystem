@@ -65,6 +65,8 @@ const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin' }
 const weekdayFormat = new Intl.DateTimeFormat('en-GB', { weekday: 'short', timeZone: 'Europe/Berlin' });
 const dateFormat = new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Berlin' });
 const longDateFormat = new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+// the timetable period's first and last day: "12 July 2026"
+const periodFormat = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
 // when the board was last updated, in the same time as the departures
 const clockFormat = new Intl.DateTimeFormat('de-DE', {
   hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Europe/Berlin',
@@ -353,6 +355,7 @@ function selectStop(id, name, source = 'search', options = {}) {
   peekBox.innerHTML = '';
   lastData = null;
   status.textContent = name ? `Loading departures for ${name}...` : 'Loading departures...';
+  showLoading();
   loadDepartures();
   clearInterval(refreshTimer);
   refreshTimer = setInterval(loadDepartures, REFRESH_MS);
@@ -409,15 +412,16 @@ function selectTab(tabId) {
   shownCount.clear();
   closeStops();
   clearPlatformMark();
-  board.innerHTML = '';
   status.textContent = 'Loading...';
+  showLoading();
   loadDepartures();
 }
 
 async function loadDepartures() {
   const request = ++requestCounter;
   // trains=together: a platform's ICEs among its regional trains (the user's choice)
-  const url = `${API}/stops/${encodeURIComponent(currentStopId)}/departures?tab=${encodeURIComponent(currentTab)}&trains=together`;
+  // when.js: from now, or from a chosen date and time
+  const url = `${API}/stops/${encodeURIComponent(currentStopId)}/departures?tab=${encodeURIComponent(currentTab)}&trains=together${window.when.param()}`;
   let res;
   try {
     res = await fetch(url);
@@ -464,8 +468,35 @@ async function loadDepartures() {
 // A failed refresh keeps the board that is shown; a board that was still
 // empty (a new stop or tab) shows the message in its place. `retrying`: the
 // failure may pass (no connection, the timetable service down)
+// another time chosen (when.js): the stop's departures from then, from the top
+document.addEventListener('when-changed', () => {
+  if (!currentStopId) return;
+  shownCount.clear();
+  closeStops();
+  status.textContent = 'Loading...';
+  // the departures of the old time go at once: nobody should take them for the new ones
+  showLoading();
+  loadDepartures();
+});
+
+// While a new list loads (another stop, tab or time) the old departures are
+// gone and the board says what is coming; the 30 s refresh keeps the list.
+function showLoading() {
+  board.innerHTML = '';
+  const time = window.when.value() ? ` for ${window.when.label()}` : '';
+  const notice = el('div', 'notice loading');
+  notice.setAttribute('role', 'status');
+  notice.appendChild(el('span', 'spinner'));
+  notice.appendChild(el('span', '', `Loading departures${time}...`));
+  board.appendChild(notice);
+  peekBox.innerHTML = '';
+  peekBox.appendChild(el('span', 'destination', 'Loading departures...'));
+}
+
 function showLoadError(message, retrying) {
   status.textContent = message;
+  const loading = board.querySelector('.loading');
+  if (loading && board.childElementCount === 1) board.innerHTML = '';
   if (!board.hasChildNodes()) {
     board.appendChild(el('div', 'notice', retrying ? `${message} The page tries again every 30 seconds.` : message));
   }
@@ -538,7 +569,7 @@ function renderPeek(data) {
     const [dep, mode] = open;
     peekBox.appendChild(el('span', badgeClass(dep, mode), dep.line));
     peekBox.appendChild(el('span', 'destination', dep.destination));
-    peekBox.appendChild(el('span', 'countdown', waitText(dep)));
+    peekBox.appendChild(el('span', 'countdown', peekTime(dep)));
     const close = el('button', 'peek-close', '✕');
     close.type = 'button';
     close.setAttribute('aria-label', 'Close this departure');
@@ -560,7 +591,13 @@ function renderPeek(data) {
   const [dep, mode] = peekShows;
   peekBox.appendChild(el('span', badgeClass(dep, mode), dep.line));
   peekBox.appendChild(el('span', 'destination', dep.destination));
-  peekBox.appendChild(el('span', 'countdown', waitText(dep)));
+  peekBox.appendChild(el('span', 'countdown', peekTime(dep)));
+}
+
+// the small bar: the wait from now, or at a chosen time the clock time (with the day if not today)
+function peekTime(dep) {
+  if (!chosenTime()) return waitText(dep);
+  return `${dayLabel(dep)} ${formatTime(dep.time)}`.trim();
 }
 
 // A tap on the departure in the small bar: the departures come up, the list
@@ -829,12 +866,17 @@ function formatTime(iso) {
   return iso ? timeFormat.format(new Date(iso)) : '?';
 }
 
-// "Mon 05.10." if the departure is on another day and far enough away that
-// the clock time alone could be misread; otherwise ''
+// the board shows the departures from a chosen time (when.js), not from now
+const chosenTime = () => Boolean(lastData && lastData.when);
+
+// "Mon 05.10." if the departure is on another day (German time) and, from
+// now, far enough away that the clock time alone could be misread; at a
+// chosen time whenever it is not today; otherwise ''
 function dayLabel(dep) {
-  if (!dep.time || dep.minutes === null || dep.minutes < SHOW_DAY_FROM_MINUTES) return '';
+  if (!dep.time) return '';
   const when = new Date(dep.time);
   if (dayFormat.format(when) === dayFormat.format(new Date())) return '';
+  if (!chosenTime() && (dep.minutes === null || dep.minutes < SHOW_DAY_FROM_MINUTES)) return '';
   return `${weekdayFormat.format(when)} ${dateFormat.format(when)}`;
 }
 
@@ -943,8 +985,19 @@ function renderDeparture(dep, mode, platform) {
   }
   row.appendChild(directionCell);
 
-  // the wait first, large; the clock time under it (late: planned crossed out, new in red)
   const when = el('td', 'when');
+  if (chosenTime() && !dep.cancelled) {
+    // a chosen time: the clock time large (late: planned crossed out, new in
+    // red), the day under it when it is not today; no wait from now
+    const time = el('div', 'countdown at-time');
+    fillTime(time, dep);
+    when.appendChild(time);
+    const day = dayLabel(dep);
+    if (day) when.appendChild(el('div', 'clock', day));
+    row.appendChild(when);
+    return row;
+  }
+  // the wait first, large; the clock time under it (late: planned crossed out, new in red)
   when.appendChild(el('div', dep.cancelled ? 'countdown gone' : 'countdown', dep.cancelled ? 'Cancelled' : waitText(dep)));
   const clock = el('div', 'clock');
   const day = dayLabel(dep);
@@ -1030,11 +1083,17 @@ function nearbyList(data) {
 // an empty board says why it is empty
 function renderEmpty(data) {
   const notice = el('div', 'notice');
-  if (data.empty === 'nearby') {
-    notice.appendChild(el('p', '', 'Nothing departs from this station itself, but there are departures right next to it:'));
+  const days = data.when ? `in the 7 days from ${window.when.label()}` : 'in the next 7 days';
+  if (data.empty === 'no_timetable') {
+    const [first, last] = window.when.range();
+    const day = d => periodFormat.format(new Date(d + 'T12:00:00Z'));
+    const period = first && last ? ` The current one covers ${day(first)} to ${day(last)}.` : '';
+    notice.appendChild(el('p', '', `There is no timetable for ${window.when.label()} yet.${period} Choose another time, or go back to now.`));
+  } else if (data.empty === 'nearby') {
+    notice.appendChild(el('p', '', `Nothing departs from this station itself ${days}, but there are departures right next to it:`));
     notice.appendChild(nearbyList(data));
   } else {
-    notice.appendChild(el('p', '', 'The timetable has no departures for this station in the next 7 days. '
+    notice.appendChild(el('p', '', `The timetable has no departures for this station ${days}. `
       + 'It may be served only in certain periods (school terms, a season), or the line may be closed.'));
   }
   return notice;
@@ -1051,13 +1110,14 @@ function renderBoard(data) {
     // nothing in the next 24 hours: these are the next departures after that
     const notice = el('div', 'notice');
     const date = longDateFormat.format(new Date(data.next_service + 'T12:00:00Z'));
+    const hours = data.when ? `in the 24 hours from ${window.when.label()}` : 'in the next 24 hours';
     if (data.nearby.length) {
       // e.g. a railway station whose trains are replaced by buses from the bus station
-      notice.appendChild(el('p', '', 'Nothing departs here in the next 24 hours. Right now there are departures next to this station:'));
+      notice.appendChild(el('p', '', `Nothing departs here ${hours}. ${data.when ? 'At that time' : 'Right now'} there are departures next to this station:`));
       notice.appendChild(nearbyList(data));
       notice.appendChild(el('p', '', `Here, the next departures are on ${date}:`));
     } else {
-      notice.appendChild(el('p', '', `Nothing departs here in the next 24 hours. The next departures are on ${date}:`));
+      notice.appendChild(el('p', '', `Nothing departs here ${hours}. The next departures are on ${date}:`));
     }
     board.appendChild(notice);
   }

@@ -859,7 +859,7 @@ class SearchIndexTest(StopsDbTestCase):
 class StoreTest(StopsDbTestCase):
     def test_info(self):
         info = store.info(today=date(2026, 10, 2))
-        self.assertEqual(list(info), ["attribution", "source", "version", "valid_until", "imported_at", "stations", "expired"])
+        self.assertEqual(list(info), ["attribution", "source", "version", "valid_until", "imported_at", "stations", "expired", "valid_from"])
         self.assertEqual((info["attribution"], info["source"]), ("Datensatz der NVBW GmbH", "https://www.nvbw.de/open-data"))
         self.assertEqual((info["version"], info["valid_until"], info["stations"]), ("20260929", "2026-12-12", len(SERVED)))
         self.assertFalse(info["expired"])

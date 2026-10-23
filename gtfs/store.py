@@ -216,13 +216,15 @@ def meta() -> dict:
 def info(today: date | None = None) -> dict:
     """Where the stop data comes from and how fresh it is, for showing to
     people: {attribution, source, version, valid_until, imported_at,
-    stations, expired}."""
+    stations, expired, valid_from}."""
     data = meta()
-    valid_until = None
-    try:
-        valid_until = datetime.strptime(data.get("feed_end_date", ""), "%Y%m%d").date()
-    except ValueError:
-        pass
+
+    def day(key):
+        try:
+            return datetime.strptime(data.get(key, ""), "%Y%m%d").date()
+        except ValueError:
+            return None
+    valid_from, valid_until = day("feed_start_date"), day("feed_end_date")
     return {
         "attribution": data.get("attribution", ""),
         "source": SOURCE_PAGE,
@@ -233,4 +235,6 @@ def info(today: date | None = None) -> dict:
         # the timetable period the file was made for is over; the stops are
         # probably still right, but it is time to import a newer file
         "expired": bool(valid_until and (today or date.today()) > valid_until),
+        # the timetable period's first day (added later: kept at the end)
+        "valid_from": valid_from.isoformat() if valid_from else None,
     }

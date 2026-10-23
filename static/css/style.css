@@ -111,19 +111,19 @@ button { font: inherit; color: inherit; }
   font-size: 0.85rem; font-weight: 600; cursor: pointer; }
 
 /* settings (menu.js): a window over the blurred page */
-#settings, #favourites { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; padding: 16px;
+#settings, #favourites, #when-window { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; padding: 16px;
   padding-top: calc(16px + env(safe-area-inset-top, 0px)); padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   background: rgba(10, 14, 20, 0.28); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
-#settings[hidden], #favourites[hidden] { display: none; }
+#settings[hidden], #favourites[hidden], #when-window[hidden] { display: none; }
 .settings-card { width: min(380px, 100%); max-height: 100%; overflow-y: auto; display: grid; gap: 18px; padding: 16px 18px 20px;
   border-radius: 18px; background: var(--card); box-shadow: 0 12px 40px var(--shade); }
 .settings-top { display: flex; align-items: center; justify-content: space-between; }
 .settings-top h2 { margin: 0; font-size: 1.15rem; }
-#settings-close, #favourites-close { width: 36px; height: 36px; padding: 0; border: none; border-radius: 50%; background: var(--accent-soft); color: var(--muted);
+#settings-close, #favourites-close, #when-close { width: 36px; height: 36px; padding: 0; border: none; border-radius: 50%; background: var(--accent-soft); color: var(--muted);
   font-size: 18px; line-height: 36px; cursor: pointer; }
-#settings-close:hover, #favourites-close:hover { color: var(--text); }
+#settings-close:hover, #favourites-close:hover, #when-close:hover { color: var(--text); }
 /* the ring only for keyboard users, not after a tap or click */
-#settings-close:focus:not(:focus-visible), #favourites-close:focus:not(:focus-visible) { outline: none; }
+#settings-close:focus:not(:focus-visible), #favourites-close:focus:not(:focus-visible), #when-close:focus:not(:focus-visible) { outline: none; }
 /* the favourites' list: a tap on a row opens it; its star takes it out (Undo until closed) */
 .favourites-card { gap: 12px; }
 #favourites-filter { width: 100%; box-sizing: border-box; padding: 9px 14px; font-size: 16px; border: 1px solid var(--line); border-radius: 20px;
@@ -182,6 +182,26 @@ button { font: inherit; color: inherit; }
 .station-name { font-size: 1.25rem; margin: 0; padding-top: 2px; text-wrap: balance; }
 .nearby { color: var(--muted); font-size: 0.85rem; margin-top: 2px; }
 #status { color: var(--faint); font-size: 0.8rem; margin-top: 2px; }
+/* the departure time (when.js): one hour earlier, the chip (now or the chosen time), back to now, one hour later */
+#when-bar { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+#station:empty ~ #when-bar { display: none; }
+#when-bar button { height: 30px; border: none; border-radius: 15px; background: var(--accent-soft); color: var(--text); font-size: 0.85rem; cursor: pointer; }
+#when-earlier, #when-later, #when-reset { width: 30px; padding: 0; font-size: 1.05rem; line-height: 30px; color: var(--muted); }
+#when-reset { font-size: 0.9rem; }
+#when-bar button:disabled { opacity: 0.35; cursor: default; }
+#when-chip { padding: 0 14px; font-weight: 600; }
+#when-chip::after { content: ' \25BE'; color: var(--muted); font-weight: 400; }
+#when-chip.chosen { background: var(--accent); color: var(--card); }
+#when-chip.chosen::after { color: var(--card); }
+@media (hover: hover) { #when-bar button:not(:disabled):hover { filter: brightness(0.94); } }
+.when-card { gap: 12px; }
+#when-now, #when-show { padding: 10px 16px; border: none; border-radius: 20px; font-size: 0.95rem; font-weight: 600; cursor: pointer; }
+#when-now { background: var(--accent-soft); color: var(--text); }
+#when-show { background: var(--accent); color: var(--card); }
+#when-label { color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
+#when-input { width: 100%; box-sizing: border-box; min-height: 42px; padding: 8px 12px; font-size: 16px; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--bg); color: var(--text); color-scheme: light dark; }
+#when-range:empty { display: none; }
 .tabs { display: flex; gap: 6px; margin-top: 10px; overflow-x: auto; scrollbar-width: none; }
 /* the line filter: one row of chips that scrolls sideways, like the tabs */
 .line-chips { display: flex; gap: 6px; margin-top: 8px; overflow-x: auto; scrollbar-width: none; touch-action: pan-x; }
@@ -251,6 +271,16 @@ tr.departure.open td { background: var(--accent-soft); }
 .when { width: 1%; text-align: right; white-space: nowrap; }
 .countdown { font-weight: 700; font-size: 1.02rem; }
 .countdown.gone { color: var(--late); font-size: 0.9rem; }
+/* at a chosen time the clock time takes the wait's place */
+.countdown.at-time { font-variant-numeric: tabular-nums; }
+/* a new list on its way: a ring turning, and what is loading */
+.notice.loading { display: flex; align-items: center; gap: 12px; padding: 18px 16px; font-weight: 600;
+  border-color: var(--line); background: var(--card); color: var(--muted); }
+.spinner { flex-shrink: 0; width: 20px; height: 20px; border: 3px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%;
+  animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+.countdown.at-time s { color: var(--faint); font-weight: 400; font-size: 0.85rem; margin-right: 4px; }
 .clock { color: var(--muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
 .clock s { color: var(--faint); margin-right: 4px; }
 .clock .day { color: var(--muted); }
@@ -329,8 +359,8 @@ tr.stop.cancelled .stop-name, tr.stop.cancelled .stop-name a { text-decoration: 
   /* the head's parts in the order the small bar needs: grip, name, next departure; then the rest */
   #panel-head { position: sticky; top: 0; z-index: 3; display: flex; flex-direction: column; margin: 0 -14px; padding: 0 14px 8px; border-radius: 18px 18px 0 0; }
   #station { display: contents; }
-  #sheet-grip { order: 0; } .station-name { order: 1; } #peek { order: 2; } .nearby { order: 3; } #panel-head .tabs, #panel-head .line-chips { order: 4; } #status { order: 5; }
-  body.sheet-peek #panel-head .nearby, body.sheet-peek #panel-head .tabs, body.sheet-peek #panel-head .line-chips, body.sheet-peek #station:not(:empty) ~ #status { display: none; }
+  #sheet-grip { order: 0; } .station-name { order: 1; } #peek { order: 2; } .nearby { order: 3; } #panel-head .tabs, #panel-head .line-chips { order: 4; } #when-bar { order: 5; } #status { order: 6; }
+  body.sheet-peek #panel-head .nearby, body.sheet-peek #panel-head .tabs, body.sheet-peek #panel-head .line-chips, body.sheet-peek #station:not(:empty) ~ #status, body.sheet-peek #when-bar { display: none; }
   /* the grip: a wide, tall strip to grab, with the bar drawn in its middle */
   #sheet-grip { display: block; width: 100%; height: 30px; margin: 0; padding: 0; border: none; background: none; cursor: grab; touch-action: none; }
   #sheet-grip::before { content: ''; display: block; width: 48px; height: 5px; margin: 11px auto 0; border-radius: 3px; background: var(--grip); }

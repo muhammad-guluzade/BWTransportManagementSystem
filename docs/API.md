@@ -73,15 +73,16 @@ Lists the endpoints.
     "valid_until": "2026-12-12",
     "imported_at": "2026-10-02T01:37:45Z",
     "stations": 29387,
-    "expired": false
+    "expired": false,
+    "valid_from": "2026-07-12"
   }
 }
 ```
 
 `stop_data` describes the stop database behind the "stops in an area"
 endpoint: which release of NVBW's timetable file it was built from
-(`version`), the last day of the timetable period that file covers
-(`valid_until`), and when it was imported. `expired` turns `true` after
+(`version`), the first and the last day of the timetable period that file
+covers (`valid_from`, `valid_until`), and when it was imported. `expired` turns `true` after
 `valid_until`: the stops are probably still right, but a newer file should
 be imported. `stop_data` is `null` until the database has been built. A
 client that shows stops from this API must show `attribution` with a link
@@ -277,6 +278,7 @@ type (tab), grouped by mode, then by platform.
 | `tab` | optional | A tab `id` from `tabs`. Missing or unknown: the first tab. |
 | `platform` | optional | A platform `id` of this stop (from a board, or from the stops-in-an-area endpoint): only that platform's departures, see "One platform" below. `tab` is ignored then. |
 | `trains` | optional | `together`: regional and long-distance trains are one mode, `trains` ("Trains"), so a platform lists its ICEs among its regional trains, in time order. Without it they are two modes, as described below. Nothing else changes (S-Bahn, buses and the rest keep their own modes). |
+| `when` | optional | The departures from this moment on, instead of from now: `2026-10-25T08:00` is German local time (as on the station's clock; in the hour that happens twice when the clocks go back, the first one), `2026-10-25T06:00Z` or `...+01:00` that exact moment. To the minute; missing or `now`: now. Any time of the timetable period works, past or future (`stop_data` in `/api/v1/` says which period). Away from now there is usually no live data: delays and cancellations show up when the timetable service has them, mostly in the next two or three hours. Malformed: `400 invalid_parameter`. |
 
 A station shows only its own departures. Stations right next to it (e.g. the
 underground part of a main station, or the bus station in front of it) are
@@ -344,7 +346,8 @@ and one departure)
   ],
   "empty": null,
   "next_service": null,
-  "platform": null
+  "platform": null,
+  "when": null
 }
 ```
 
@@ -357,8 +360,9 @@ and one departure)
 | `tabs` | Transport types that have departures here: `[{id, name}]`. Empty if the station has none. |
 | `tab` | The `id` of the tab this response shows, or `null`. |
 | `modes` | The departures, see below. In display order. |
-| `empty` | `null` if there are departures. Otherwise why there are none: `"nearby"` (nothing departs here in the next 7 days, but linked stations in `nearby` have service), `"no_service"` (the timetable has nothing for this station in the next 7 days, nor for the ones next to it) or, when one platform was asked for, `"platform"` (nothing departs from it in the next 24 hours). |
+| `empty` | `null` if there are departures. Otherwise why there are none: `"nearby"` (nothing departs here in the next 7 days, but linked stations in `nearby` have service), `"no_service"` (the timetable has nothing for this station in the next 7 days, nor for the ones next to it), when one platform was asked for, `"platform"` (nothing departs from it in the next 24 hours), or `"no_timetable"` (the `when` asked for is outside the timetable period, e.g. after the December timetable change before the next timetable is published). "Next 24 hours / 7 days" count from `when` if one was given. |
 | `platform` | `null`, unless one platform was asked for: then that platform, see "One platform". |
+| `when` | The moment the departures start from, in UTC (`"2026-10-25T06:00:00Z"`), as asked for with `when`; `null` for now. |
 | `next_service` | Normally `null`. The timetable service only knows the next 24 hours; a stop served on school days only has nothing there on a Saturday. In that case the API looks up to a week ahead, returns the first departures it finds in `modes` (all transport types together, `tabs` empty) and sets `next_service` to their local date, e.g. `"2026-10-05"`. A client should say so, and show the date with these departures. |
 
 Tab ids: `trains`, `sbahn`, `tram`, `bus`, `ferry`, `cablecar`, `other`.
@@ -448,7 +452,8 @@ a station whose trains are currently replaced by buses from the bus station):
   "modes": [],
   "empty": "nearby",
   "next_service": null,
-  "platform": null
+  "platform": null,
+  "when": null
 }
 ```
 

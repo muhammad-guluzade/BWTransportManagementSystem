@@ -8,10 +8,13 @@ values behind it (`id`, `code`), so a client can build its own labels.
 Once clients exist, v1 responses must only grow (new fields are fine);
 anything that renames or removes a field belongs in a new version.
 """
+from datetime import datetime, timezone
+
 from flask import Blueprint, current_app, jsonify, request
 
 from api import limits
 from efa.client import EfaError
+from efa.localtime import from_local
 from gtfs.store import StopsNotImported
 from services import departures, stops
 
@@ -67,6 +70,33 @@ def invalid_area(exc):
     return error(400, "invalid_parameter", str(exc))
 
 
+class InvalidTime(ValueError):
+    pass
+
+
+@bp.errorhandler(InvalidTime)
+def invalid_time(exc):
+    return error(400, "invalid_parameter", str(exc))
+
+
+def chosen_time(text: str) -> datetime | None:
+    """The `when` of a departures request as a UTC moment, to the minute;
+    None for now. "2026-10-25T08:00" is German local time (what people read
+    on the station's clock); with "Z" or an offset it is that moment."""
+    text = text.strip()
+    if not text or text.lower() == "now":
+        return None
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", "+00:00").replace(" ", "T"))
+    except ValueError:
+        raise InvalidTime("when must be a date and time like 2026-10-25T08:00 (German time), or now") from None
+    if moment.tzinfo is None:
+        moment = from_local(moment)
+    if not 2000 <= moment.year <= 2100:
+        raise InvalidTime("when is out of range")
+    return moment.astimezone(timezone.utc).replace(second=0, microsecond=0)
+
+
 @bp.errorhandler(StopsNotImported)
 def stops_not_imported(exc):
     return error(503, "stops_not_imported",
@@ -105,7 +135,8 @@ def search_stops():
 @bp.route("/stops/<stop_id>/departures")
 def stop_departures(stop_id):
     return jsonify(departures.board(stop_id.strip(), request.args.get("tab", ""), request.args.get("platform", "").strip(),
-                                    trains_together=request.args.get("trains", "").strip().lower() == "together"))
+                                    trains_together=request.args.get("trains", "").strip().lower() == "together",
+                                    start=chosen_time(request.args.get("when", ""))))
 
 
 @bp.route("/stops/<stop_id>/departures/<departure_id>/stops")

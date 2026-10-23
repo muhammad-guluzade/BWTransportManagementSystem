@@ -325,6 +325,82 @@ class SearchTest(ApiTestCase):
             self.assertEqual((res.status_code, res.get_json()), (200, {"stops": []}))
 
 
+class ChosenTimeTest(ApiTestCase):
+    """Departures from a chosen date and time (`when`, German local time)."""
+
+    def setUp(self):
+        super().setUp()
+        self.starts = []
+
+        def departures_at(stop_id, classes=(), start=None, **kw):
+            self.starts.append(start)
+            return {"stopEvents": self.events} if stop_id == STOP and (not classes or 13 in classes) else {}
+        client.get_departures = departures_at
+
+    def get(self, when):
+        return self.http.get(f"/api/v1/stops/{STOP}/departures", query_string={"when": when})
+
+    def test_german_time_becomes_utc_for_every_request(self):
+        body = self.get("2026-10-26T07:00").get_json()
+        self.assertEqual(body["when"], "2026-10-26T06:00:00Z")          # winter time: UTC+1
+        self.assertTrue(self.starts)
+        self.assertTrue(all(s == datetime(2026, 10, 26, 6, 0, tzinfo=timezone.utc) for s in self.starts), self.starts)
+        self.assertEqual(self.get("2026-10-23T08:00").get_json()["when"], "2026-10-23T06:00:00Z")   # summer time: UTC+2
+
+    def test_now_and_nothing_are_now(self):
+        for when in ("", "now", "NOW "):
+            self.starts.clear()
+            body = self.get(when).get_json()
+            self.assertIsNone(body["when"])
+            self.assertTrue(all(s is None for s in self.starts))
+
+    def test_an_explicit_zone_is_that_moment(self):
+        self.assertEqual(self.get("2026-10-26T07:00:00+01:00").get_json()["when"], "2026-10-26T06:00:00Z")
+        self.assertEqual(self.get("2026-10-26T06:00Z").get_json()["when"], "2026-10-26T06:00:00Z")
+        self.assertEqual(self.get("2026-10-26T07:00:59").get_json()["when"], "2026-10-26T06:00:00Z")   # to the minute
+
+    def test_the_hours_around_the_clock_changes(self):
+        # 25 October 02:30 happens twice: the first, still summer time
+        self.assertEqual(self.get("2026-10-25T02:30").get_json()["when"], "2026-10-25T00:30:00Z")
+        # 28 March 2027 02:30 does not exist: read as winter time (03:30 summer time)
+        self.assertEqual(self.get("2027-03-28T02:30").get_json()["when"], "2027-03-28T01:30:00Z")
+
+    def test_nonsense_is_refused(self):
+        for when in ("tomorrow", "2026-13-01T10:00", "25.10.2026 08:00", "1999-01-01T00:00", "2026-10-25T25:00"):
+            res = self.get(when)
+            self.assertEqual((res.status_code, res.get_json()["error"]["code"]), (400, "invalid_parameter"), when)
+
+    def test_outside_the_timetable_says_so(self):
+        original = departures.store.info
+        departures.store.info = lambda: {"valid_from": "2026-07-12", "valid_until": "2026-12-12"}
+        try:
+            self.events = []
+            for when in ("2026-12-24T10:00", "2026-07-01T10:00"):
+                self.starts.clear()
+                body = self.get(when).get_json()
+                self.assertEqual((body["empty"], body["modes"], body["next_service"]), ("no_timetable", [], None), when)
+                self.assertTrue(all(s is not None for s in self.starts), "nothing looked for at another time")
+            # inside the period an empty board is the usual kind
+            self.assertNotEqual(self.get("2026-11-02T10:00").get_json()["empty"], "no_timetable")
+            # departures found are shown, even outside the known period (a newer timetable)
+            self.events = [EVENT]
+            self.assertIsNone(self.get("2026-12-24T10:00").get_json()["empty"])
+        finally:
+            departures.store.info = original
+
+    def test_look_ahead_starts_from_the_chosen_time(self):
+        asked = []
+        original = departures.later_departures
+        departures.later_departures = lambda stop_id, now=None: asked.append(now) or []
+        try:
+            self.events = []
+            self.get("2026-11-02T10:00")
+            self.get("")
+        finally:
+            departures.later_departures = original
+        self.assertEqual(asked, [datetime(2026, 11, 2, 9, 0, tzinfo=timezone.utc), None])
+
+
 class DeparturesTest(ApiTestCase):
     def get(self, query=""):
         return self.http.get(f"/api/v1/stops/{STOP}/departures{query}")
@@ -333,7 +409,7 @@ class DeparturesTest(ApiTestCase):
         res = self.get()
         self.assertEqual(res.status_code, 200)
         body = res.get_json()
-        self.assertEqual(list(body), ["stop", "nearby", "tabs", "tab", "modes", "empty", "next_service", "platform"])
+        self.assertEqual(list(body), ["stop", "nearby", "tabs", "tab", "modes", "empty", "next_service", "platform", "when"])
         self.assertIsNone(body["next_service"])
         self.assertIsNone(body["platform"])   # the whole stop, not one platform of it
         self.assertEqual(body["stop"], {"id": STOP, "name": "Stuttgart, Hauptbahnhof (oben)", "lat": 48.784729, "lon": 9.183172})
@@ -490,7 +566,7 @@ class PlatformBoardTest(ApiTestCase):
         res = self.get()
         self.assertEqual(res.status_code, 200)
         body = res.get_json()
-        self.assertEqual(list(body), ["stop", "nearby", "tabs", "tab", "modes", "empty", "next_service", "platform"])
+        self.assertEqual(list(body), ["stop", "nearby", "tabs", "tab", "modes", "empty", "next_service", "platform", "when"])
         self.assertEqual(body["stop"]["id"], STOP)
         # one platform has no tabs to choose from; `tab` says what kind of transport it is
         self.assertEqual((body["tabs"], body["tab"], body["empty"], body["next_service"]), ([], "bus", None, None))
@@ -899,10 +975,11 @@ class PageTest(unittest.TestCase):
 
     def test_page_files_carry_their_version(self):
         page = self.http.get("/").get_data(as_text=True)
-        for name in ("css/style.css", "js/menu.js", "js/update.js", "js/mine.js", "js/departures.js", "js/favourites.js", "js/sheet.js", "js/map.js", "js/address.js"):
+        for name in ("css/style.css", "js/menu.js", "js/update.js", "js/mine.js", "js/when.js", "js/departures.js", "js/favourites.js", "js/sheet.js", "js/map.js", "js/address.js"):
             self.assertRegex(page, rf'/static/{name}\?v=\d+"', name)
         self.assertLess(page.index("js/map.js"), page.index("js/address.js"))   # address.js opens the stop: last
         self.assertLess(page.index("js/mine.js"), page.index("js/departures.js"))   # the board uses the favourites
+        self.assertLess(page.index("js/when.js"), page.index("js/departures.js"))   # the board asks it for the time
         self.assertLess(page.index("js/departures.js"), page.index("js/favourites.js"))   # the window opens through the board
 
     def test_tab_icon(self):

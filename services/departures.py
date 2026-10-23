@@ -47,6 +47,26 @@ def put_trains_together(departures: list) -> list:
 EMPTY_NEARBY = "nearby"          # nothing here, but linked stations have service
 EMPTY_NO_SERVICE = "no_service"  # the timetable has nothing for this station
 EMPTY_PLATFORM = "platform"      # the one platform asked for has nothing in the next 24 hours
+EMPTY_NO_TIMETABLE = "no_timetable"  # the chosen time is outside the timetable period
+
+
+def outside_timetable(start: datetime | None) -> bool:
+    """Is a chosen moment before or after the period of the timetable we
+    know (the stop data's, e.g. 12 July to 12 December)? Now never is;
+    without a stop database nothing is known, so no."""
+    if start is None:
+        return False
+    try:
+        info = store.info()
+    except (store.StopsNotImported, sqlite3.Error):
+        return False
+    day = to_local(start).date().isoformat()
+    return bool((info["valid_from"] and day < info["valid_from"]) or (info["valid_until"] and day > info["valid_until"]))
+
+
+def when_text(start: datetime | None) -> str | None:
+    """The chosen moment as the API writes times (UTC); None for now."""
+    return start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if start else None
 
 # EFA only answers with departures of the next 24 hours (a departure 23 hours
 # away is found, one 24 hours away is not). A stop served on school days only
@@ -357,12 +377,12 @@ def group_departures(departures: list) -> list:
     return modes
 
 
-def has_departures(stop_id: str, classes) -> bool:
-    data = client.get_departures(stop_id, classes, limit=1, with_stops=False, ttl=client.TAB_CHECK_TTL)
+def has_departures(stop_id: str, classes, start: datetime | None = None) -> bool:
+    data = client.get_departures(stop_id, classes, limit=1, with_stops=False, ttl=client.TAB_CHECK_TTL, start=start)
     return bool(data.get("stopEvents"))
 
 
-def available_tabs(stop_id: str, classes) -> list:
+def available_tabs(stop_id: str, classes, start: datetime | None = None) -> list:
     """The tabs of a station, without the ones that have no departures.
 
     EFA's list of transport types per station isn't reliable -- it lists
@@ -372,12 +392,13 @@ def available_tabs(stop_id: str, classes) -> list:
     if not tabs:
         return []
     with ThreadPoolExecutor(max_workers=len(tabs)) as pool:
-        served = list(pool.map(lambda tab: has_departures(stop_id, tab["classes"]), tabs))
+        served = list(pool.map(lambda tab: has_departures(stop_id, tab["classes"], start), tabs))
     return [tab for tab, ok in zip(tabs, served) if ok]
 
 
-def load_tab(station: dict, tab_id: str):
-    """(tabs with departures, selected tab, its departures).
+def load_tab(station: dict, tab_id: str, start: datetime | None = None):
+    """(tabs with departures, selected tab, its departures), from `start`
+    on (None: now).
 
     The wanted tab's departures and the checks of the other tabs are
     fetched at the same time, so opening a station costs one round of
@@ -385,13 +406,13 @@ def load_tab(station: dict, tab_id: str):
     candidates = parse.tabs_for(station["classes"])
     if not candidates:
         # EFA didn't say what stops here; ask for everything instead
-        return [], None, parse_events(client.get_departures(station["id"]).get("stopEvents"))
+        return [], None, parse_events(client.get_departures(station["id"], start=start).get("stopEvents"))
 
     wanted = next((t for t in candidates if t["id"] == tab_id), candidates[0])
     others = [t for t in candidates if t is not wanted]
     with ThreadPoolExecutor(max_workers=len(candidates)) as pool:
-        fetch = pool.submit(client.get_departures, station["id"], wanted["classes"])
-        checks = [pool.submit(has_departures, station["id"], t["classes"]) for t in others]
+        fetch = pool.submit(client.get_departures, station["id"], wanted["classes"], start=start)
+        checks = [pool.submit(has_departures, station["id"], t["classes"], start) for t in others]
         departures = parse_events(fetch.result().get("stopEvents"))
         served = {t["id"] for t, check in zip(others, checks) if check.result()}
     if departures:
@@ -401,7 +422,7 @@ def load_tab(station: dict, tab_id: str):
     if not departures and tabs:
         # the wanted tab turned out to be empty: show the first one that isn't
         wanted = tabs[0]
-        departures = parse_events(client.get_departures(station["id"], wanted["classes"]).get("stopEvents"))
+        departures = parse_events(client.get_departures(station["id"], wanted["classes"], start=start).get("stopEvents"))
     return tabs, (wanted if departures else None), departures
 
 
@@ -426,13 +447,14 @@ def later_departures(stop_id: str, now: datetime | None = None) -> list:
     return []
 
 
-def nearby_with_service(nearby: list) -> list:
-    """Of the linked stations, those that have departures, each with the
-    transport types that really stop there: [{id, name, types: [...]}]."""
+def nearby_with_service(nearby: list, start: datetime | None = None) -> list:
+    """Of the linked stations, those that have departures (from `start` on,
+    None: now), each with the transport types that really stop there:
+    [{id, name, types: [...]}]."""
     if not nearby:
         return []
     with ThreadPoolExecutor(max_workers=len(nearby)) as pool:
-        tabs = list(pool.map(lambda n: available_tabs(n["id"], n["classes"]), nearby))
+        tabs = list(pool.map(lambda n: available_tabs(n["id"], n["classes"], start), nearby))
     return [
         {**public_stop(n), "types": [{"id": t["id"], "name": t["name"]} for t in station_tabs]}
         for n, station_tabs in zip(nearby, tabs)
@@ -453,7 +475,8 @@ def known_platform(platform_id: str) -> dict:
         return {}
 
 
-def platform_board(station: dict, nearby: list, platform_id: str, trains_together: bool = False) -> dict:
+def platform_board(station: dict, nearby: list, platform_id: str, trains_together: bool = False,
+                   start: datetime | None = None) -> dict:
     """The board of ONE platform of a station: the same shape as `board`,
     with `platform` saying which. EFA answers for a platform id with that
     platform's departures alone, so a quiet bay of a big bus station gets its
@@ -462,7 +485,7 @@ def platform_board(station: dict, nearby: list, platform_id: str, trains_togethe
     # number; some simple stops are their own and only platform
     if platform_id != station["id"] and not platform_id.startswith(station["id"] + ":"):
         raise UnknownPlatform(platform_id)
-    events = [event for event in client.get_departures(platform_id).get("stopEvents") or []
+    events = [event for event in client.get_departures(platform_id, start=start).get("stopEvents") or []
               if isinstance(event, dict) and (event.get("location") or {}).get("id") == platform_id]
     tab = next((parse.tab_of(event.get("transportation") or {}) for event in events if not parse.is_excluded(event)), None)
     departures = departing(parse_events(events), station)
@@ -478,7 +501,7 @@ def platform_board(station: dict, nearby: list, platform_id: str, trains_togethe
         "tabs": [],
         "tab": tab if modes else None,
         "modes": modes,
-        "empty": None if modes else EMPTY_PLATFORM,
+        "empty": None if modes else (EMPTY_NO_TIMETABLE if outside_timetable(start) else EMPTY_PLATFORM),
         "next_service": None,
         "platform": {
             "id": platform_id,
@@ -488,18 +511,21 @@ def platform_board(station: dict, nearby: list, platform_id: str, trains_togethe
             "lon": shown.get("lon"),
             "towards": heading if modes else shown.get("towards", []),
         },
+        "when": when_text(start),
     }
 
 
-def board(stop_id: str, tab_id: str = "", platform_id: str = "", trains_together: bool = False) -> dict:
+def board(stop_id: str, tab_id: str = "", platform_id: str = "", trains_together: bool = False,
+          start: datetime | None = None) -> dict:
     """The departure board for one station and tab:
     {stop: {id, name, lat, lon}, nearby: [{id, name, lat, lon}],
      tabs: [{id, name}], tab, modes: [...],
-     empty: None | "nearby" | "no_service" | "platform",
-     next_service: None | "YYYY-MM-DD", platform: None | {...}}.
+     empty: None | "nearby" | "no_service" | "platform" | "no_timetable",
+     next_service: None | "YYYY-MM-DD", platform: None | {...}, when: None | "...Z"}.
 
-    `next_service` is set when nothing departs in the next 24 hours and the
-    departures shown are the next ones after that; it is their (local) date.
+    The departures are those from `start` on (a UTC moment; None: now).
+    `next_service` is set when nothing departs in the 24 hours from then and
+    the departures shown are the next ones after that; it is their (local) date.
     With `platform_id` the board holds that platform's departures only, see
     `platform_board`. With `trains_together` regional and long-distance
     trains are one mode, "Trains"."""
@@ -526,14 +552,19 @@ def board(stop_id: str, tab_id: str = "", platform_id: str = "", trains_together
         raise UnknownStop(stop_id)
     nearby = [n for n in station["nearby"] if parse.in_baden_wuerttemberg(n["id"])]
     if platform_id:
-        return platform_board(station, nearby, platform_id, trains_together)
+        return platform_board(station, nearby, platform_id, trains_together, start)
 
-    tabs, tab, departures = load_tab(station, tab_id)
+    tabs, tab, departures = load_tab(station, tab_id, start)
     departures = departing(departures, station)
 
     next_service = None
+    if not departures and outside_timetable(start):
+        # before or after the timetable the timetable service has: nothing
+        # to look for, here or next door
+        return {"stop": public_stop(station), "nearby": [public_stop(n) for n in nearby], "tabs": [], "tab": None,
+                "modes": [], "empty": EMPTY_NO_TIMETABLE, "next_service": None, "platform": None, "when": when_text(start)}
     if not departures:
-        departures = departing(later_departures(station["id"]), station)
+        departures = departing(later_departures(station["id"], start), station)
         times = [dep["time"] for dep in departures if dep["time"]]
         if times:
             next_service = to_local(parse.parse_time(min(times))).date().isoformat()
@@ -542,12 +573,12 @@ def board(stop_id: str, tab_id: str = "", platform_id: str = "", trains_together
     if not departures:
         # say why: a station can be empty while the one next door has all the
         # service (e.g. rail replacement buses leaving from the bus station)
-        nearby = nearby_with_service(nearby)
+        nearby = nearby_with_service(nearby, start)
         empty = EMPTY_NEARBY if nearby else EMPTY_NO_SERVICE
     elif next_service:
         # nothing today, but later: until then the station next door may be
         # where everything leaves from, and a visitor should be told
-        nearby = nearby_with_service(nearby)
+        nearby = nearby_with_service(nearby, start)
     else:
         nearby = [public_stop(n) for n in nearby]
     if trains_together:
@@ -562,4 +593,5 @@ def board(stop_id: str, tab_id: str = "", platform_id: str = "", trains_together
         "empty": empty,
         "next_service": next_service,
         "platform": None,
+        "when": when_text(start),
     }
