@@ -122,6 +122,36 @@ def parse_stop(point: dict) -> dict | None:
     }
 
 
+# what the search finds besides stops, as the navigator names the kinds
+PLACE_KINDS = {"poi": "place", "singlehouse": "address", "address": "address", "street": "street"}
+
+
+def municipality_in_bw(code) -> bool | None:
+    """Is a municipality (EFA's "omc" 8421000, or a locality "placeID:8421000:-1")
+    in Baden-Württemberg? German municipality keys start with the state, 08
+    for Baden-Württemberg (Ulm 08421000; Neu-Ulm across the Danube 09775135).
+    None when unknown."""
+    found = re.search(r"\d{6,8}", str(code or ""))
+    if not found:
+        return None
+    return found.group(0).zfill(8).startswith("08")
+
+
+def parse_place(point: dict) -> dict | None:
+    """A search match that is not a stop - a sight or building ("poi"), an
+    address ("singlehouse"), a street - as {kind, name, lat, lon}; None for
+    anything else or without a position. For the navigator: a place to start
+    from or go to."""
+    kind = PLACE_KINDS.get(point.get("anyType"))
+    if not kind:
+        return None
+    lon, lat = lat_lon(str((point.get("ref") or {}).get("coords") or "").split(","))
+    name = (point.get("name") or point.get("object") or "").strip()
+    if lat is None or not name or municipality_in_bw((point.get("ref") or {}).get("omc")) is False:
+        return None
+    return {"kind": kind, "name": name, "lat": lat, "lon": lon}
+
+
 def in_baden_wuerttemberg(stop_id: str) -> bool:
     """Global stop ids start with the country and state code; 08 is BW."""
     return stop_id.startswith("de:08")

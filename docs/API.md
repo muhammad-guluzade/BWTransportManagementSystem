@@ -60,7 +60,7 @@ Lists the endpoints.
   "name": "BW Departures API",
   "version": 1,
   "endpoints": {
-    "search_stops": "/api/v1/stops/search?q={text}&near={lat},{lon}&radius={km}&limit={n}",
+    "search_stops": "/api/v1/stops/search?q={text}&near={lat},{lon}&radius={km}&limit={n}&places={0|1}",
     "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}&platforms={0|1}",
     "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}",
     "platform_departures": "/api/v1/stops/{stop_id}/departures?platform={platform_id}",
@@ -89,7 +89,7 @@ be imported. `stop_data` is `null` until the database has been built. A
 client that shows stops from this API must show `attribution` with a link
 to `source`.
 
-### `GET /api/v1/stops/search?q={text}&near={lat},{lon}&radius={km}&limit={n}`
+### `GET /api/v1/stops/search?q={text}&near={lat},{lon}&radius={km}&limit={n}&places={0|1}`
 
 Finds stops by name, best match first. Made for a search box that asks
 again with every key typed.
@@ -100,6 +100,7 @@ again with every key typed.
 | `near` | optional | Where the user's map is (its centre), as `lat,lon`. Stops there come first. |
 | `radius` | optional | How far that map shows, in kilometres from its centre. Default 10. With a map of the whole state (a large radius) no place is preferred. |
 | `limit` | optional | How many stops to return at most. Default 10, maximum 25. |
+| `places` | optional | `1`: also sights, addresses and streets (for a journey's start or destination), as `places`. Default `0`. |
 
 What the search copes with:
 
@@ -165,6 +166,7 @@ Example: `/api/v1/stops/search?q=Stuttgart Hauptbahnhof`
 | `lat`, `lon` | Position of the stop. |
 | `types` | Transport types listed for the stop (by the timetable service, or by the stop database for a stop only it found). A hint only: it can include a type that has no departures. The departures endpoint returns the verified list as `tabs`. |
 | `partial` | `true` if the stop fits only some of the words typed (see "Words that fit no stop"). Such stops only come when the stop database has no stop that fits all the words; the timetable service's own matches are never partial. |
+| `places` | Only with `places=1`: up to 5 places of Baden-Württemberg the timetable service's search finds, as it ranks them: `kind` (`"place"`: a sight or building, `"address"`, `"street"`), `name` (with the town, `"Stuttgart, Mercedes-Benz Museum"`), `lat`, `lon`. Pass the position to the journeys endpoint as a point. Empty when the timetable service doesn't answer. |
 
 ### `GET /api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}&platforms={0|1}`
 
@@ -561,7 +563,7 @@ Baden-Württemberg; the journey itself may pass through other states.
 
 | Parameter | | |
 |---|---|---|
-| `from`, `to` | required | A stop `id` from the search (`de:08111:115`), or a point `lat,lon` (`48.7789,9.1767`: a place on the map, or the user's location). A point counts as in Baden-Württemberg when a stop of the state is within about 3 km. |
+| `from`, `to` | required | A stop `id` from the search (`de:08111:115`), or a point `lat,lon` (`48.7789,9.1767`: a place on the map, or the user's location). A point counts as in Baden-Württemberg when a stop of the state is within about 3 km and the town the journey planner finds there is in the state (Neu-Ulm, next to Ulm, is not). |
 | `when` | optional | As for the departures: German local time (`2026-11-02T08:00`) or a moment with a zone; missing: now. |
 | `arrive` | optional | `1`: `when` is the latest arrival ("arrive by"), not the departure. |
 | `dticket` | optional | `1`: only connections whose every ride is valid with the Deutschlandticket (no ICE, IC/EC, Flixbus ...). |

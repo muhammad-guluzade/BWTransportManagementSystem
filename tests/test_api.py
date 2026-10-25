@@ -325,6 +325,52 @@ class SearchTest(ApiTestCase):
             self.assertEqual((res.status_code, res.get_json()), (200, {"stops": []}))
 
 
+class PlacesSearchTest(ApiTestCase):
+    """The navigator's search (`places=1`): sights, addresses and streets of
+    Baden-Württemberg next to the stops."""
+    def setUp(self):
+        super().setUp()
+        client.find_stops = lambda query: {"stopFinder": {"points": [
+            SEARCH["stopFinder"]["points"][0],
+            {"anyType": "poi", "name": "Stuttgart, Mercedes-Benz Museum", "object": "Mercedes-Benz Museum",
+             "ref": {"omc": "8111000", "coords": "9.233666,48.788546"}},
+            {"anyType": "singlehouse", "name": "Stuttgart, Königstraße 9/1", "ref": {"omc": "8111000", "coords": "9.178923,48.778839"}},
+            {"anyType": "singlehouse", "name": "Stuttgart, Königstraße 9/1", "ref": {"omc": "8111000", "coords": "9.178923,48.778839"}},
+            {"anyType": "street", "name": "Ulm, Hauptstraße", "ref": {"omc": "8421000", "coords": "9.98,48.40"}},
+            {"anyType": "street", "name": "Neu-Ulm, Hauptstraße", "ref": {"omc": "9775135", "coords": "10.01,48.39"}},
+            {"anyType": "street", "name": "Bahnhofstraße"},                                   # no position
+            {"anyType": "locality", "name": "Stuttgart", "ref": {"omc": "8111000", "coords": "9.18,48.78"}},
+        ]}}
+
+    def test_places(self):
+        body = self.http.get("/api/v1/stops/search?q=Stuttgart&places=1").get_json()
+        self.assertEqual([s["id"] for s in body["stops"]], [STOP])
+        self.assertEqual(body["places"], [
+            {"kind": "place", "name": "Stuttgart, Mercedes-Benz Museum", "lat": 48.788546, "lon": 9.233666},
+            {"kind": "address", "name": "Stuttgart, Königstraße 9/1", "lat": 48.778839, "lon": 9.178923},
+            {"kind": "street", "name": "Ulm, Hauptstraße", "lat": 48.40, "lon": 9.98},
+        ])
+
+    def test_only_when_asked(self):
+        self.assertNotIn("places", self.http.get("/api/v1/stops/search?q=Stuttgart").get_json())
+        self.assertEqual(self.http.get("/api/v1/stops/search?q=a&places=1").get_json(), {"stops": [], "places": []})
+
+    def test_the_service_down_gives_no_places(self):
+        def down(query):
+            raise client.EfaError("down")
+        client.find_stops = down
+        self.assertEqual(stops.place_matches("Stuttgart"), [])
+
+    def test_state_by_municipality_key(self):
+        self.assertTrue(parse.municipality_in_bw("8421000"))
+        self.assertTrue(parse.municipality_in_bw("placeID:8111000:-1"))
+        self.assertTrue(parse.municipality_in_bw("08111000"))
+        self.assertFalse(parse.municipality_in_bw("9775135"))
+        self.assertFalse(parse.municipality_in_bw("placeID:9162000:-1"))
+        for unknown in (None, "", "-1", "placeID:-1:-1"):
+            self.assertIsNone(parse.municipality_in_bw(unknown))
+
+
 class ChosenTimeTest(ApiTestCase):
     """Departures from a chosen date and time (`when`, German local time)."""
 

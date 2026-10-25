@@ -165,6 +165,26 @@ class PlanTest(unittest.TestCase):
         with self.assertRaises(journeys.InvalidPlace):
             journeys.plan(PRAG, "de:08111:99999")
 
+    def test_a_point_across_the_border(self):
+        """Neu-Ulm is next to Ulm's stops: the town the planner found there
+        decides (its municipality key; 08 = Baden-Württemberg)."""
+        store.in_area = lambda *a, **kw: ([{"id": "x"}], 1)
+        neu_ulm = journey()
+        neu_ulm["legs"][0]["origin"]["parent"] = {"id": "placeID:9775135:-1", "name": "Neu-Ulm", "type": "locality"}
+        self.answer = {"journeys": [neu_ulm]}
+        with self.assertRaisesRegex(journeys.InvalidPlace, "from is outside"):
+            journeys.plan("48.3955,10.0115", ULM)
+        self.assertEqual(len(journeys.plan(PRAG, ULM)["journeys"]), 1)    # a stop id is never asked
+        neu_ulm["legs"][-1]["destination"]["parent"] = {"id": "placeID:9775135:-1"}
+        with self.assertRaisesRegex(journeys.InvalidPlace, "to is outside"):
+            journeys.plan(PRAG, "48.3955,10.0115")
+        ulm = journey()
+        ulm["legs"][0]["origin"]["parent"] = {"id": "placeID:8421000:-1", "name": "Ulm", "type": "locality"}
+        self.answer = {"journeys": [ulm]}
+        self.assertEqual(len(journeys.plan("48.3984,9.9916", ULM)["journeys"]), 1)
+        self.answer = {"journeys": ["nonsense", {"legs": "x"}]}             # nothing says: allowed
+        self.assertEqual(journeys.plan("48.3984,9.9916", ULM)["journeys"], [])
+
     def test_trains_are_one_kind_as_on_the_boards(self):
         self.answer = {"journeys": [journey(second=ICE)]}
         legs = journeys.plan(PRAG, ULM)["journeys"][0]["legs"]

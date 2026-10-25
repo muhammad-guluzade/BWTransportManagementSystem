@@ -57,7 +57,8 @@ def place(text: str, which: str) -> tuple:
 
 def in_baden_wuerttemberg(lat: float, lon: float) -> bool:
     """A point is in the state when one of its stops is near (the outline of
-    the state is not a box: Strasbourg and Basel are in its box)."""
+    the state is not a box: Strasbourg and Basel are in its box). Near the
+    border that is not enough (Neu-Ulm): plan() then asks the town's key."""
     try:
         d = NEAR_A_STOP_DEGREES
         stops, total = store.in_area(lon - d, lat - d, lon + d, lat + d, 1)
@@ -65,6 +66,19 @@ def in_baden_wuerttemberg(lat: float, lon: float) -> bool:
     except (store.StopsNotImported, sqlite3.Error, ValueError):
         south, west, north, east = BW_BOX
         return south <= lat <= north and west <= lon <= east
+
+
+def town_in_bw(data: dict, end: str) -> bool | None:
+    """Is the town the planner found at a journey's "origin" / "destination"
+    in Baden-Württemberg (by its municipality key)? None: no answer says."""
+    for raw in data.get("journeys") or []:
+        legs = raw.get("legs") if isinstance(raw, dict) else None
+        leg = (legs[0] if end == "origin" else legs[-1]) if isinstance(legs, list) and legs else None
+        location = leg.get(end) if isinstance(leg, dict) else None
+        parent = location.get("parent") if isinstance(location, dict) else None
+        if isinstance(parent, dict):
+            return parse.municipality_in_bw(parent.get("id"))
+    return None
 
 
 def ride_events(raw: dict) -> list:
@@ -79,6 +93,11 @@ def plan(origin: str, destination: str, start: datetime | None = None, arrive: b
     asked_to, end_place = place(destination, "to")
     data = client.get_journeys(asked_from, asked_to, start, arrive, DTICKET_CLASSES if dticket else (),
                                JOURNEYS_DTICKET if dticket else JOURNEYS)
+    # a point near the state's border can still be across it (Neu-Ulm): the
+    # town the planner found there says which state
+    for which, asked, end in (("from", start_place, "origin"), ("to", end_place, "destination")):
+        if asked["kind"] == "place" and town_in_bw(data, end) is False:
+            raise InvalidPlace(f"{which} is outside Baden-Württemberg")
     importance = departures.stop_importance()
     journeys, seen = [], set()
     for raw in data.get("journeys") or []:

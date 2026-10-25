@@ -87,6 +87,37 @@ def efa_matches(query: str) -> list:
     return sorted(stops, key=lambda s: (-s["quality"], -len(s["classes"])))
 
 
+PLACES_LIMIT = 5
+
+
+def place_matches(query: str, limit: int = PLACES_LIMIT) -> list:
+    """Sights, addresses and streets the timetable service's search finds
+    for `query` in Baden-Württemberg, as [{kind, name, lat, lon}] (for the
+    navigator; the answer of the stop search is kept a while, so asking
+    again right after it costs nothing). [] when the service can't be asked."""
+    from services import journeys   # (it imports this module's neighbours)
+    query = " ".join(query.split())
+    if len(query) < 2:
+        return []
+    try:
+        points = parse.extract_points(client.find_stops(query))
+    except client.EfaError:
+        return []
+    places, names = [], set()
+    for point in points:
+        try:
+            found = parse.parse_place(point)
+        except Exception:  # noqa: BLE001 -- skip just this match
+            continue
+        if not found or found["name"] in names or not journeys.in_baden_wuerttemberg(found["lat"], found["lon"]):
+            continue
+        names.add(found["name"])
+        places.append(found)
+        if len(places) == limit:
+            break
+    return places
+
+
 def own_matches(query: str, place: tuple | None, radius_km: float, limit: int) -> list | None:
     """What the stop database finds, or None if it hasn't been built."""
     try:
