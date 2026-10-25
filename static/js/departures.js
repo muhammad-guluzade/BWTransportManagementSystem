@@ -358,8 +358,18 @@ function selectStop(id, name, source = 'search', options = {}) {
   showLoading();
   loadDepartures();
   clearInterval(refreshTimer);
-  refreshTimer = setInterval(loadDepartures, REFRESH_MS);
+  refreshTimer = setInterval(refreshBoard, REFRESH_MS);
 }
+
+// the 30 s refresh pauses while Route mode hides the departures; back from
+// it, the board is brought up to date at once
+const routeShown = () => document.body.classList.contains('route-mode');
+function refreshBoard() {
+  if (!routeShown()) loadDepartures();
+}
+document.addEventListener('mode-changed', (e) => {
+  if (e.detail.mode === 'departures' && currentStopId) loadDepartures();
+});
 
 // the panel's close button (wide screens): back to the start, the map alone
 function closeStop() {
@@ -395,6 +405,7 @@ document.getElementById('panel-close').addEventListener('click', closeStop);
 document.addEventListener('map-touched', (e) => {
   // (only in the "Sheet" layout: the two screens' map always shows the small bar, so a single tap would do it)
   if (e.detail.kind !== 'tap' || !window.sheet || window.sheet.mode() !== 'sheet' || window.sheet.state() !== 'peek' || !currentStopId) return;
+  if (document.body.classList.contains('route-mode')) return;   // (Route mode asks "from here or to here?")
   closeStop();
 });
 
@@ -769,6 +780,19 @@ function renderStation(data) {
     else window.mine.add(favourite);
   }));
   stationBox.appendChild(name);
+
+  // the navigator: a journey from or to this stop (route.js)
+  if (window.route) {
+    const links = el('div', 'route-links');
+    const place = { kind: 'stop', id: data.stop.id, name: data.stop.name, lat: data.stop.lat, lon: data.stop.lon };
+    [['from', 'Route from here'], ['to', 'Route to here']].forEach(([end, text]) => {
+      const button = el('button', '', text);
+      button.type = 'button';
+      button.onclick = (e) => { e.stopPropagation(); window.route.startWith(end, place); };
+      links.appendChild(button);
+    });
+    stationBox.appendChild(links);
+  }
 
   // when the board is empty, or only has departures days ahead, the nearby
   // stations are part of the notice on the board instead

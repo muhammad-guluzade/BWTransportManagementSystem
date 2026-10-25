@@ -169,6 +169,8 @@
     label: () => (chosen ? label(chosen) : 'now'),
     param: () => (chosen ? `&when=${encodeURIComponent(chosen)}` : ''),
     range: () => [first, last],
+    // the same clock and labels for the navigator's own time (route.js)
+    tools: { germanNow, label, add, inRange, clamp },
     set,
     open,
     close,

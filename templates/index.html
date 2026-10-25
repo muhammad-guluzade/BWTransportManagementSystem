@@ -34,11 +34,42 @@
      on wider screens the map is on the left and the panel on the right. -->
 <header id="top">
   <p class="brand">BW <span>Departures</span></p>
+  <!-- the two modes (route.js): a stop's departures, or a journey from one place to another -->
+  <div id="mode-switch" role="group" aria-label="Mode">
+    <button type="button" data-mode="departures" aria-pressed="true">Departures</button>
+    <button type="button" data-mode="route" aria-pressed="false">Route</button>
+  </div>
   <div id="search-box">
     <input type="search" id="stop-input" placeholder="Search a stop" autocomplete="off" enterkeyhint="search" aria-label="Search a stop"
            role="combobox" aria-controls="results" aria-expanded="false" aria-autocomplete="list">
     <button type="button" id="search-clear" aria-label="Clear the search">&#x2715;</button>
-    <div id="results" role="listbox"></div>
+    <div id="results" class="results" role="listbox"></div>
+  </div>
+  <!-- Route mode (route.js): start and destination, the time, D-Ticket only -->
+  <div id="route-form" hidden>
+    <!-- phones, once connections are shown: the form folded into one line; a tap opens it again -->
+    <button type="button" id="route-summary" aria-label="Change start, destination or time"></button>
+    <div class="route-places">
+      <div class="route-field" data-end="from">
+        <span class="route-tag">From</span>
+        <input type="search" id="route-from" placeholder="Stop, place or address" autocomplete="off" enterkeyhint="next" aria-label="From"
+               role="combobox" aria-controls="route-from-results" aria-expanded="false" aria-autocomplete="list">
+        <button type="button" class="route-clear" aria-label="Clear the start">&#x2715;</button>
+        <div id="route-from-results" class="results route-results" role="listbox"></div>
+      </div>
+      <div class="route-field" data-end="to">
+        <span class="route-tag">To</span>
+        <input type="search" id="route-to" placeholder="Stop, place or address" autocomplete="off" enterkeyhint="search" aria-label="To"
+               role="combobox" aria-controls="route-to-results" aria-expanded="false" aria-autocomplete="list">
+        <button type="button" class="route-clear" aria-label="Clear the destination">&#x2715;</button>
+        <div id="route-to-results" class="results route-results" role="listbox"></div>
+      </div>
+      <button type="button" id="route-swap" aria-label="Swap start and destination" title="Swap start and destination">&#x21C5;</button>
+    </div>
+    <div class="route-opts">
+      <button type="button" id="route-when-chip" aria-haspopup="dialog" aria-controls="route-when-window">Now</button>
+      <label class="route-switch"><input type="checkbox" id="route-dticket"><i aria-hidden="true"></i>D-Ticket only</label>
+    </div>
   </div>
 </header>
 
@@ -65,9 +96,12 @@
         <button type="button" id="when-later" aria-label="One hour later">&#x203A;</button>
       </div>
       <div id="status">Search a stop or tap one on the map.</div>
+      <!-- Route mode (route.js): what is asked, and how it went -->
+      <div id="route-head" hidden></div>
     </div>
     <div id="board"></div>
     <div id="raw"></div>
+    <div id="route-board" hidden></div>
   </section>
 </main>
 
@@ -101,6 +135,25 @@
     <input type="datetime-local" id="when-input" step="60">
     <p class="settings-note" id="when-range"></p>
     <button type="button" id="when-show">Show departures</button>
+  </div>
+</div>
+
+<!-- the journey's time (route.js): leave at, or arrive by -->
+<div id="route-when-window" role="dialog" aria-modal="true" aria-labelledby="route-when-title" hidden>
+  <div class="settings-card when-card">
+    <div class="settings-top">
+      <h2 id="route-when-title">Journey time</h2>
+      <button type="button" id="route-when-close" aria-label="Close">&#x2715;</button>
+    </div>
+    <div class="theme-choice" role="group" aria-label="Depart or arrive">
+      <button type="button" data-route-time="depart" aria-pressed="true">Depart at</button>
+      <button type="button" data-route-time="arrive" aria-pressed="false">Arrive by</button>
+    </div>
+    <button type="button" id="route-when-now">Leave now</button>
+    <label id="route-when-label" for="route-when-input">Or choose a date and time <span id="route-when-zone" hidden>(German time)</span></label>
+    <input type="datetime-local" id="route-when-input" step="60">
+    <p class="settings-note" id="route-when-range"></p>
+    <button type="button" id="route-when-show">Find connections</button>
   </div>
 </div>
 
@@ -156,6 +209,7 @@
 <script src="{{ url_for('static', filename='js/when.js') }}"></script>
 <script src="{{ url_for('static', filename='js/departures.js') }}"></script>
 <script src="{{ url_for('static', filename='js/favourites.js') }}"></script>
+<script src="{{ url_for('static', filename='js/route.js') }}"></script>
 <script src="{{ url_for('static', filename='js/sheet.js') }}"></script>
 <script src="{{ url_for('static', filename='js/map.js') }}"></script>
 <script src="{{ url_for('static', filename='js/address.js') }}"></script>

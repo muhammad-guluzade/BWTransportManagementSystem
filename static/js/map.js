@@ -41,6 +41,9 @@
   const TAP_TOLERANCE_PX = TOUCH ? 12 : 3;
   const SMALLEST_DOT_PX = TOUCH ? 7 : 5;
 
+  // Route mode (route.js): a tap on a stop or the map asks "from here or to here?"
+  const routeMode = () => document.body.classList.contains('route-mode');
+
   const map = L.map('map', {
     maxBounds: BW.pad(0.1),       // the map can't be dragged away from BW
     maxBoundsViscosity: 1.0,
@@ -156,7 +159,13 @@
   // wants the map: on a phone the sheet goes down (sheet.js), and a second tap
   // closes an open departure (departures.js); dragging only looks around
   const touched = kind => document.dispatchEvent(new CustomEvent('map-touched', { detail: { kind } }));
-  map.on('click', () => touched('tap'));
+  // (a tap that only closes the question of Route mode asks nothing new)
+  let popupWasOpen = false;
+  map.on('preclick', () => { popupWasOpen = Boolean(routePopup && map.hasLayer(routePopup)); });
+  map.on('click', (e) => {
+    if (routeMode() && !popupWasOpen) askRoute(e.latlng, { kind: 'place', id: null, name: 'Point on the map', lat: e.latlng.lat, lon: e.latlng.lng });
+    touched('tap');
+  });
   map.on('dragstart', () => touched('drag'));
 
   function dotRadius(stop) {
@@ -201,7 +210,7 @@
     const positions = markerPositions(stops);
     // least important first, so the important markers end up on top
     stops.slice().reverse().forEach(stop => {
-      const selected = stop.id === selectedId;
+      const selected = stop.id === selectedId && !routeMode();
       const marker = L.circleMarker(positions.get(stop.id), {
         renderer: dotRenderer,
         radius: dotRadius(stop) + (selected ? 2 : 0),
@@ -216,7 +225,10 @@
       const label = document.createElement('span');
       label.textContent = stop.name;
       marker.bindTooltip(label, { direction: 'top' });
-      marker.on('click', () => selectStop(stop.id, stop.name, 'map'));
+      marker.on('click', () => {
+        if (routeMode()) askRoute(marker.getLatLng(), { kind: 'stop', id: stop.id, name: stop.name, lat: stop.lat, lon: stop.lon });
+        else selectStop(stop.id, stop.name, 'map');
+      });
       stopsLayer.addLayer(marker);
       // the timetable service and the stop database place a station a few
       // metres apart; keep the glow exactly on the marker
@@ -332,6 +344,107 @@
     } catch { /* the credit line is not worth an error message */ }
   }
 
+  // ---------- Route mode (route.js) ----------
+  // A tap on a stop or on any spot asks whether the journey starts or ends
+  // there; the route of the connection opened is drawn in the lines' colours
+  // (dashed: on foot), with the start and the destination marked.
+  const ROUTE_COLOURS = { u_bahn_tram: '#005aa9', s_bahn: '#2e8b47', trains: '#d63c3c', regional_train: '#d63c3c', long_distance_train: '#c1121c',
+    bus: '#a1338f', long_distance_bus: '#a1338f' };
+  const WALK_COLOUR = '#6b7280';
+  const routeLayer = L.layerGroup();
+  // the route lies above the stops' dots (and lets taps through to them)
+  const routePane = map.createPane('route');
+  routePane.style.zIndex = 450;
+  routePane.style.pointerEvents = 'none';
+  let routePopup = null;
+  let routeShown = '';   // what the map was last fitted to: it moves only when that changes
+
+  function askRoute(at, place) {
+    const box = el('div', 'route-pop');
+    box.appendChild(el('div', 'route-pop-name', place.name));
+    const buttons = el('div', 'route-pop-buttons');
+    [['from', 'From here'], ['to', 'To here']].forEach(([end, text]) => {
+      const button = el('button', '', text);
+      button.type = 'button';
+      button.onclick = () => { map.closePopup(); window.route.choose(end, place); };
+      buttons.appendChild(button);
+    });
+    box.appendChild(buttons);
+    const { top, bottom } = covered();
+    routePopup = L.popup({ autoPanPaddingTopLeft: [12, top + 12], autoPanPaddingBottomRight: [12, bottom + 12], minWidth: 180 })
+      .setLatLng(at).setContent(box).openOn(map);
+  }
+
+  const lineColour = leg => (leg.kind === 'walk' ? WALK_COLOUR : leg.brand === 'ice' ? '#c1121c' : leg.brand === 'flix' ? '#73d700'
+    : ROUTE_COLOURS[leg.mode.id] || '#5b6470');
+
+  function endMark(place, which) {
+    if (!place || place.lat === null || place.lon === null || place.lat === undefined) return null;
+    const dot = document.createElement('span');
+    const marker = L.marker([place.lat, place.lon], {
+      icon: L.divIcon({ className: `route-end ${which}${place.kind === 'me' ? ' me' : ''}`, html: dot, iconSize: [0, 0] }),
+      keyboard: false, zIndexOffset: 1200,
+    });
+    const label = document.createElement('span');
+    label.textContent = `${which === 'from' ? 'From' : 'To'}: ${place.name}`;
+    marker.bindTooltip(label, { direction: 'top', offset: [0, -10] });
+    return marker;
+  }
+
+  function drawRoute({ active, journey, from, to }) {
+    routeLayer.clearLayers();
+    if (!active) return;
+    const points = [];
+    if (journey) {
+      journey.legs.forEach(leg => {
+        const path = leg.path && leg.path.length > 1 ? leg.path
+          : [[leg.from.lat, leg.from.lon], [leg.to.lat, leg.to.lon]].filter(([a, b]) => a !== null && b !== null);
+        if (path.length < 2) return;
+        points.push(...path);
+        const walk = leg.kind === 'walk';
+        // a light edge under each line keeps it readable on any map
+        if (!walk) L.polyline(path, { pane: 'route', color: '#fff', weight: 9, opacity: 0.8, interactive: false }).addTo(routeLayer);
+        L.polyline(path, { pane: 'route', color: lineColour(leg), weight: walk ? 4 : 6, opacity: 0.95, dashArray: walk ? '2 8' : null, lineCap: 'round',
+          interactive: false }).addTo(routeLayer);
+      });
+      // where one ride ends and the next begins
+      journey.legs.slice(1).forEach(leg => {
+        if (leg.from.lat === null) return;
+        L.circleMarker([leg.from.lat, leg.from.lon], { pane: 'route', radius: 5, color: '#1d2228', weight: 2.5, fillColor: '#fff', fillOpacity: 1, interactive: false })
+          .addTo(routeLayer);
+      });
+    }
+    [[from, 'from'], [to, 'to']].forEach(([place, which]) => {
+      const mark = endMark(place, which);
+      if (mark) { mark.addTo(routeLayer); points.push([place.lat, place.lon]); }
+    });
+    // the map moves only when there is something new to see
+    const key = journey ? `j:${journey.id}` : `e:${[from, to].map(p => (p && p.lat !== null ? `${p.lat},${p.lon}` : '')).join('|')}`;
+    if (key === routeShown || !points.length) return;
+    routeShown = key;
+    if (!journey && points.length === 1) {
+      if (!inSight(L.latLng(points[0]))) showAt(L.latLng(points[0]), Math.max(map.getZoom(), STOP_ZOOM - 2));
+      return;
+    }
+    // (the free part of the map can be small on a phone: then the margins shrink, or the route is fitted to the whole map)
+    let { top, bottom } = covered();
+    const free = map.getSize().y - top - bottom;
+    const margin = free > 160 ? 30 : 8;
+    if (free < 80) top = bottom = 0;
+    map.fitBounds(L.latLngBounds(points), { paddingTopLeft: [margin, top + margin], paddingBottomRight: [margin, bottom + margin], maxZoom: 16, animate: false });
+  }
+
+  document.addEventListener('route-drawn', (e) => drawRoute(e.detail));
+  // the other mode: the departures' selection and pin, or the route
+  document.addEventListener('mode-changed', (e) => {
+    const route = e.detail.mode === 'route';
+    map.closePopup();
+    [selectedLayer, platformLayer].forEach(layer => { if (route) map.removeLayer(layer); else layer.addTo(map); });
+    if (route) routeLayer.addTo(map); else map.removeLayer(routeLayer);
+    routeShown = '';
+    drawStops(lastStops);
+  });
+
   // for looking at the map from the browser console
-  window.stopMap = { map, stopsLayer, selectedId: () => selectedId, platformMark: () => platformMark };
+  window.stopMap = { map, stopsLayer, routeLayer, selectedId: () => selectedId, platformMark: () => platformMark };
 })();

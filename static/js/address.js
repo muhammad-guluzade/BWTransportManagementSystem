@@ -8,6 +8,8 @@
 //   2. a full sheet goes down to half (the two screens: the departures
 //      screen goes back to the map; a wide screen has no such step);
 //   3. the stop shown before, then the start, then the page left.
+// Route mode (route.js) lies on top of that: Back first closes an open
+// connection, then lowers a full sheet, then goes back to the departures.
 //
 // How: each stop has one entry in the browser's history, and above it one
 // more entry for each thing open (`layers`, 0 to 2), all with the same
@@ -28,14 +30,23 @@
   const here = () => (history.state && history.state.bw ? history.state : null);
 
   // the things open now that Back closes, counted
+  const routeMode = () => Boolean(window.route && window.route.active());
   function openLayers() {
     let n = openDeparture ? 1 : 0;
-    if (window.sheet && window.sheet.state() === 'full') n += 1;
+    if (window.sheet && window.sheet.stateIn('departures') === 'full') n += 1;
+    if (routeMode()) {
+      n += 1 + (window.route.openId() ? 1 : 0);
+      if (window.sheet && window.sheet.state() === 'full') n += 1;
+    }
     return n;
   }
   // close the one Back closes first
   function closeOne() {
-    if (openDeparture) closeOpen();
+    if (routeMode()) {
+      if (window.route.openId()) window.route.close();
+      else if (window.sheet && window.sheet.state() === 'full') window.sheet.set(window.sheet.mode() === 'screens' ? 'peek' : 'half');
+      else window.route.setMode('departures');
+    } else if (openDeparture) closeOpen();
     else if (window.sheet && window.sheet.state() === 'full') window.sheet.set(window.sheet.mode() === 'screens' ? 'peek' : 'half');
   }
 
@@ -113,7 +124,8 @@
       }
     });
   }
-  ['stop-picked', 'stop-shown', 'stop-cleared', 'departure-changed', 'sheet-changed'].forEach(type => document.addEventListener(type, update));
+  ['stop-picked', 'stop-shown', 'stop-cleared', 'departure-changed', 'sheet-changed', 'mode-changed', 'route-changed']
+    .forEach(type => document.addEventListener(type, update));
   // a screen turned or resized across the phone / wide line: the sheet's step comes or goes
   window.addEventListener('resize', update);
 
@@ -127,6 +139,7 @@
     later(async () => {
       const at = here() || entry(stopInAddress(), '', 0);
       if (at.stop !== currentStopId) {
+        if (routeMode()) window.route.setMode('departures');
         if (at.stop) selectStop(at.stop, at.name || '', 'history');
         else closeStop();
         // an entry above a stop's own one (Forward) can't be opened again

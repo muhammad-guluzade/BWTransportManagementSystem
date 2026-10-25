@@ -47,7 +47,11 @@
 
   const active = () => narrow.matches;
   const screens = () => document.body.classList.contains('layout-screens');
-  const hasStop = () => picked;
+  // Route mode (route.js) has its own content: the connections
+  const routeMode = () => document.body.classList.contains('route-mode');
+  const hasStop = () => (routeMode() ? Boolean(window.route && window.route.hasContent()) : picked);
+  // each mode keeps its own height: going back to one finds the sheet as it was
+  const savedState = { departures: 'peek', route: 'peek' };
   // The sheet's parts (the user's design, 19 October). Where a finger comes
   // down decides what the whole touch does, wherever the finger goes after,
   // until it is lifted:
@@ -79,6 +83,8 @@
     panel.style.setProperty('--sheet-y', `${Math.round(y)}px`);
     document.documentElement.style.setProperty('--sheet-top', `${g.top}px`);
     document.documentElement.style.setProperty('--sheet-bottom', `${g.bottom}px`);
+    // the round buttons on the map stay under the top bar, which is taller in Route mode
+    document.documentElement.style.setProperty('--top-bottom', `${g.top}px`);
     // the map's own controls (its credits button) stay above the sheet
     document.documentElement.style.setProperty('--map-covered', `${Math.round(g.height - y + g.bottom)}px`);
   }
@@ -223,13 +229,27 @@
   });
   // a tap on the empty map: the user wants the map (dragging it only looks
   // around); the two screens' map is already the map
+  // (in Route mode a tap asks "from here or to here?" instead: map.js)
   document.addEventListener('map-touched', (e) => {
-    if (e.detail.kind === 'tap' && !screens() && state !== 'peek') setState('peek');
+    if (e.detail.kind === 'tap' && !screens() && state !== 'peek' && !routeMode()) setState('peek');
+  });
+  // Route mode: connections are being looked for: the sheet comes up for them
+  document.addEventListener('route-searched', () => {
+    if (screens()) setState('full');
+    else if (state === 'peek') setState('half');
+  });
+  // the other mode: its own height again (without content only the bar)
+  document.addEventListener('mode-changed', (e) => {
+    const now = e.detail.mode;
+    savedState[now === 'route' ? 'departures' : 'route'] = state;
+    lastSeen = null;
+    setState(hasStop() ? savedState[now] : 'peek', false);
   });
   // the stop was given up (departures.js): back to the bar with its hint
   document.addEventListener('stop-cleared', () => {
     picked = false;
-    setState('peek');
+    if (routeMode()) savedState.departures = 'peek';
+    else setState('peek');
   });
   // a button somewhere asks for a height ("Show platform on map": half, which
   // the two screens make the map; 'list': the departures, half or the list screen)
@@ -249,6 +269,7 @@
     place(geometry().positions[state]);
   }
   new ResizeObserver(refit).observe(head);
+  new ResizeObserver(refit).observe(searchBar);   // the top bar: taller in Route mode, or with a long name
   window.addEventListener('resize', refit);
 
   let sheetLayout = null;   // the layout last set up: true = sheet, false = side panel
@@ -274,6 +295,8 @@
     // a tap that ends a drag is no tap (departures.js asks)
     wasDragged: () => justDragged,
     set: setState,
+    // the height in a mode, also in the one not shown (address.js counts it)
+    stateIn: m => (!active() ? null : (routeMode() ? 'route' : 'departures') === m ? state : savedState[m]),
     // how much of the map the search box and the sheet (and the two screens'
     // bar) cover, for map.js to keep what it shows in the free part; null
     // when nothing covers it. A full sheet hides the map: then plan for the
