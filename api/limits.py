@@ -23,7 +23,7 @@ import time
 
 # kind of request -> (bucket size, tokens back per second)
 LIMITS = {
-    # asks the timetable service: boards, a departure's stops, the search
+    # asks the timetable service: boards, a departure's stops, the search, journeys
     "timetable": (60, 0.5),
     # answered from the stop database: the map's stops, the API's index
     "local": (120, 4.0),
@@ -32,6 +32,7 @@ KIND_OF_ENDPOINT = {
     "api_v1.stop_departures": "timetable",
     "api_v1.departure_stops": "timetable",
     "api_v1.search_stops": "timetable",
+    "api_v1.plan_journeys": "timetable",
     "api_v1.stops_in_area": "local",
     "api_v1.index": "local",
 }

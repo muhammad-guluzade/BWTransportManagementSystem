@@ -51,7 +51,7 @@ _last_sweep = [0.0]
 
 
 def _is_big(data) -> bool:
-    return isinstance(data, dict) and len(data.get("stopEvents") or []) > _BIG_FROM_DEPARTURES
+    return isinstance(data, dict) and (len(data.get("stopEvents") or []) > _BIG_FROM_DEPARTURES or bool(data.get("journeys")))
 
 
 def _remember(key, data, expires, now):
@@ -214,3 +214,41 @@ def get_departures(stop_id: str, classes=(), limit: int = 100, with_stops: bool 
         for cls in classes:
             params[f"inclMOT_{cls}"] = "on"
     return efa_get("XML_DM_REQUEST", params, ttl=ttl)
+
+
+JOURNEYS_TTL = 30
+
+
+def get_journeys(origin: str, destination: str, start: datetime | None = None, arrive: bool = False,
+                 classes=(), count: int = 5) -> dict:
+    """Raw journey-planner response: connections from `origin` to
+    `destination`, each a stop id ("de:08111:115") or a point
+    ("lat,lon" already turned into EFA's "lon:lat:WGS84[dd.ddddd]" by the
+    caller, see `place_param`). `start` (UTC; None: now) is the departure,
+    or with `arrive` the latest arrival. `classes`: only these product
+    classes (the D-Ticket switch)."""
+    params = {
+        "outputFormat": "rapidJSON",
+        "coordOutputFormat": "WGS84[dd.ddddd]",
+        "calcNumberOfTrips": count,
+        "useRealtime": 1,
+        "type_origin": "coord" if origin.endswith("WGS84[dd.ddddd]") else "any",
+        "name_origin": origin,
+        "type_destination": "coord" if destination.endswith("WGS84[dd.ddddd]") else "any",
+        "name_destination": destination,
+    }
+    if start:
+        local = to_local(start)  # EFA takes the time in German local time
+        params.update({"itdDate": local.strftime("%Y%m%d"), "itdTime": local.strftime("%H%M")})
+    params["itdTripDateTimeDepArr"] = "arr" if arrive else "dep"
+    if classes:
+        params["includedMeans"] = "checkbox"
+        for cls in classes:
+            params[f"inclMOT_{cls}"] = "on"
+    return efa_get("XML_TRIP_REQUEST2", params, ttl=JOURNEYS_TTL)
+
+
+def place_param(lat: float, lon: float) -> str:
+    """A point on the map as EFA wants it."""
+    return f"{lon:.5f}:{lat:.5f}:WGS84[dd.ddddd]"
+

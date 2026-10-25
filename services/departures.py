@@ -171,7 +171,7 @@ def trip(stop_id: str, departure_id: str) -> dict:
     data = client.get_departures(stop_id, (), start=wanted["planned"] - timedelta(minutes=1))
     for event in data.get("stopEvents") or []:
         try:
-            if parse.departure_id(event) == departure_id and not parse.is_excluded(event):
+            if same_ride(parse.departure_id(event), departure_id, wanted) and not parse.is_excluded(event):
                 found = parse.parse_trip(event)
                 if found["here"]["id"] == stop_id:
                     remember_trip(found)
@@ -179,6 +179,20 @@ def trip(stop_id: str, departure_id: str) -> dict:
         except Exception:  # noqa: BLE001 -- an unreadable event is not the one we want
             continue
     raise UnknownDeparture(departure_id)
+
+
+def same_ride(board_id: str, departure_id: str, wanted: dict) -> bool:
+    """Is this departure of the board the one asked for? The same id; or the
+    same planned time, line and trip at the same station, whatever platform
+    either names: the journey planner and the board do not always agree
+    (25 October 2026: a journey's RE1 named only Stuttgart Hbf where the board
+    had platform 1, a MEX13 platform 3:3 where the board had 3:2 or only the
+    station), and a train can move to another platform."""
+    if board_id == departure_id:
+        return True
+    other = parse.decode_departure_id(board_id)
+    station = lambda platform_id: ":".join(platform_id.split(":")[:3])
+    return bool(other) and other["planned"] == wanted["planned"] and other["line_id"] == wanted["line_id"]         and other["trip"] == wanted["trip"] and bool(wanted["trip"]) and station(other["platform_id"]) == station(wanted["platform_id"])
 
 
 def dedupe(departures: list) -> list:

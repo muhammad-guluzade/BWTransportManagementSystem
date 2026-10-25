@@ -64,7 +64,8 @@ Lists the endpoints.
     "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}&platforms={0|1}",
     "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}",
     "platform_departures": "/api/v1/stops/{stop_id}/departures?platform={platform_id}",
-    "departure_stops": "/api/v1/stops/{stop_id}/departures/{departure_id}/stops"
+    "departure_stops": "/api/v1/stops/{stop_id}/departures/{departure_id}/stops",
+    "journeys": "/api/v1/journeys?from={stop_id|lat,lon}&to={stop_id|lat,lon}&when={time}&arrive={0|1}&dticket={0|1}"
   },
   "stop_data": {
     "attribution": "Datensatz der NVBW GmbH",
@@ -551,6 +552,84 @@ The board remembers its departures' stops for about ten minutes, so this
 answer normally comes at once. After that the timetable service is asked
 again; once a departure has left and the service no longer lists it, the
 answer is `unknown_departure`.
+
+### `GET /api/v1/journeys?from={place}&to={place}&when={time}&arrive={0|1}&dticket={0|1}`
+
+Connections from one place to another by public transport, from the
+timetable service's journey planner. Start and destination are in
+Baden-Württemberg; the journey itself may pass through other states.
+
+| Parameter | | |
+|---|---|---|
+| `from`, `to` | required | A stop `id` from the search (`de:08111:115`), or a point `lat,lon` (`48.7789,9.1767`: a place on the map, or the user's location). A point counts as in Baden-Württemberg when a stop of the state is within about 3 km. |
+| `when` | optional | As for the departures: German local time (`2026-11-02T08:00`) or a moment with a zone; missing: now. |
+| `arrive` | optional | `1`: `when` is the latest arrival ("arrive by"), not the departure. |
+| `dticket` | optional | `1`: only connections whose every ride is valid with the Deutschlandticket (no ICE, IC/EC, Flixbus ...). |
+
+Connections that left before `when` (or now) are left out, and with `arrive`
+those arriving after `when`; flights and on-demand services are never
+offered. Example (shortened to one connection; times in UTC):
+
+```json
+{
+  "from": {"kind": "stop", "id": "de:08111:115", "lat": 48.798104, "lon": 9.182516, "name": "Pragfriedhof"},
+  "to": {"kind": "stop", "id": "de:08421:1008", "lat": 48.399, "lon": 9.983, "name": "Ulm Hauptbahnhof"},
+  "when": null,
+  "arrive": false,
+  "dticket": false,
+  "journeys": [
+    {
+      "id": "3f0a6c1e9d2b7a44",
+      "departure": {"time": "2026-10-25T16:01:00Z", "planned": "2026-10-25T16:01:00Z", "delay": 0},
+      "arrival": {"time": "2026-10-25T17:00:00Z", "planned": "2026-10-25T17:00:00Z", "delay": 0},
+      "minutes": 59,
+      "changes": 1,
+      "dticket": false,
+      "legs": [
+        {
+          "kind": "ride",
+          "line": "U6",
+          "mode": {"id": "u_bahn_tram", "name": "U-Bahn / Tram"},
+          "brand": null,
+          "destination": "Flughafen/Messe",
+          "dticket": true,
+          "replacement": false,
+          "departure_id": "MjAyNi0xMC0yNVQxNjowMTowMFp8ZGU6MDgxMTE6MTE1OjE6MXx2dnM6MjAwMDY6IDpIOmoyNnwxMjM0",
+          "board_stop": "de:08111:115",
+          "from": {"id": "de:08111:115", "name": "Pragfriedhof", "lat": 48.798104, "lon": 9.182516, "has_board": true,
+                   "platform": {"code": "1", "name": "Platform 1"}, "time": "2026-10-25T16:01:00Z",
+                   "planned": "2026-10-25T16:01:00Z", "delay": 0, "realtime": true, "cancelled": false, "kind": "stop"},
+          "to": {"id": "de:08111:6112", "name": "Hauptbahnhof (A.-Klett-Platz)", "...": "as from"},
+          "stops": [{"id": "de:08111:6064", "name": "Hauptbf (Arnulf-Klett-Platz) ...", "...": "as from"}],
+          "path": [[48.798104, 9.182516], [48.79231, 9.18113]],
+          "notices": [{"title": "Stuttgart-Mitte/Degerloch: Streckenunterbrechung und Ersatzverkehr mit Bussen wegen Weichenarbeiten",
+                       "text": "Von Samstag, 24. Oktober 2026 ...", "priority": "normal"}]
+        },
+        {"kind": "walk", "minutes": 10, "metres": 700, "from": {"...": "a stop or place"}, "to": {"...": "a stop or place"}, "path": []},
+        {"kind": "ride", "line": "ICE 599", "mode": {"id": "trains", "name": "Trains"}, "brand": "ice", "...": "..."}
+      ],
+      "transfers": [
+        {"at": "Hauptbahnhof (A.-Klett-Platz)", "to": "Stuttgart Hauptbahnhof", "walk_minutes": 10,
+         "needed_minutes": 10, "spare_minutes": 2, "possible": true}
+      ]
+    }
+  ],
+  "empty": null
+}
+```
+
+| Field | |
+|---|---|
+| `from`, `to` | The places asked for: `kind` `"stop"` (with `id`) or `"place"` (a point; `id` null), `lat`, `lon`, and `name` as the journey planner names it (for a point: the address there); `name` is null when nothing was found. |
+| `journeys` | The connections, by departure. `departure` / `arrival`: `time` (live when known), `planned`, `delay` (minutes). `minutes`: door to door. `changes`: rides minus one. `dticket`: every ride is valid with the Deutschlandticket. |
+| `legs` | In travel order. A `"ride"` has `line`, `mode` (as on the boards; regional and long-distance trains are one mode, `trains`), `brand`, `destination` (on the vehicle's sign), `dticket`, `replacement`, `from` / `to` (stops as in a departure's stop list, with `platform`, live `time`), `stops` (the ones in between), `path` (`[lat, lon]` points to draw, simplified to about 10 m), `notices` (the operators' messages: `title`, plain-text `text`, `priority` `"normal"`, `"high"` or `"veryHigh"`; texts as the operators write them, mostly German). A `"walk"` has `minutes`, `metres`, `from`, `to`, `path`. |
+| `departure_id`, `board_stop` | The same ride on the departure board of the stop it leaves from: `GET /api/v1/stops/{board_stop}/departures/{departure_id}/stops` gives its live times, its live arrival at every stop ahead, and whether it is cancelled. That is how a client follows a connection. `board_stop` is null for a ride starting outside Baden-Württemberg. |
+| `transfers` | One per change: `at` (where the ride ends), `to` (where the next starts), `walk_minutes` (null: no walk), `needed_minutes` (the walk, else 2 minutes to another platform, 1 on the same), `spare_minutes` (left over with the times given; can be negative), `possible`. |
+| `empty` | `null` if there are connections. Otherwise why there are none: `"too_close"` (start and destination are the same place), `"no_timetable"` (`when` is outside the timetable period) or `"none"` (the planner found nothing, e.g. at night). |
+
+Errors: `400 invalid_parameter` for a missing or unusable `from` / `to` (not
+a stop id of Baden-Württemberg, a stop that doesn't exist, a point outside
+the state) or a malformed `when`.
 
 ## Errors
 

@@ -7,6 +7,8 @@ checked against real responses with `python debug_efa.py --survey`.
 """
 import base64
 import binascii
+import hashlib
+import html
 import re
 from datetime import datetime, timezone
 
@@ -514,7 +516,8 @@ def departure_id(event: dict) -> str:
 
 
 def decode_departure_id(token: str) -> dict | None:
-    """{planned, platform_id} out of a departure id, or None if it isn't one."""
+    """{planned, platform_id, line_id, trip} out of a departure id, or None
+    if it isn't one."""
     try:
         text = base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)).decode("utf-8")
     except (binascii.Error, ValueError, UnicodeDecodeError):
@@ -523,7 +526,7 @@ def decode_departure_id(token: str) -> dict | None:
     planned = parse_time(parts[0]) if len(parts) == 4 else None
     if not planned or not parts[1]:
         return None
-    return {"planned": planned, "platform_id": parts[1]}
+    return {"planned": planned, "platform_id": parts[1], "line_id": parts[2], "trip": parts[3]}
 
 
 def trip_stop(location: dict, city: str, arriving: bool) -> dict:
@@ -645,3 +648,204 @@ def parse_departure(event: dict, now: datetime | None = None, importance: dict |
         "realtime": estimated is not None,
         "cancelled": event.get("isCancelled") is True,
     }
+
+
+# --- journeys (the journey planner, XML_TRIP_REQUEST2) ----------------------
+
+# a walk (EFA's product classes, both named "footpath"): 100 to or from an
+# address or a point on the map, 99 between two stations (Arnulf-Klett-Platz
+# to the Hauptbahnhof)
+WALK_CLASSES = {99, 100}
+# The least time a change needs when the planner gives no walk for it (it
+# only says "Fussweg" without minutes): to another platform, and staying on
+# the same one. A walk leg brings its own minutes.
+CHANGE_OTHER_PLATFORM_MINUTES = 2
+CHANGE_SAME_PLATFORM_MINUTES = 1
+
+
+def is_walk(leg: dict) -> bool:
+    product = (leg.get("transportation") or {}).get("product") or {}
+    return product.get("class") in WALK_CLASSES or product.get("name") == "footpath"
+
+
+def leg_as_event(leg: dict) -> dict:
+    """A ride of a journey in the shape of a departure-board event, so that
+    the board's rules apply to it unchanged: line names, mode, brand,
+    D-Ticket, and the departure's id (the same id as on the board of the stop
+    it leaves from, so the live checks can look the ride up there)."""
+    origin = leg.get("origin") or {}
+    return {
+        "location": origin,
+        "departureTimePlanned": origin.get("departureTimePlanned"),
+        "departureTimeEstimated": origin.get("departureTimeEstimated"),
+        "transportation": leg.get("transportation") or {},
+        "onwardLocations": (leg.get("stopSequence") or [])[1:],
+        "isCancelled": origin.get("isCancelled"),
+    }
+
+
+def journey_place(location: dict, city: str, arriving: bool) -> dict:
+    """A start, an end or a change of a journey: a stop (with its platform),
+    or, for a point on the map, the address the planner found there."""
+    place = trip_stop(location, city, arriving)
+    kind = "stop" if location.get("type") in ("stop", "platform") else "place"
+    if kind == "place":
+        place["id"] = ""
+        place["has_board"] = False
+        place["name"] = location.get("name") or "?"
+    place["kind"] = kind
+    return place
+
+
+def plain_text(markup: str) -> str:
+    """An operator's notice (HTML) as plain text: line breaks and list items
+    kept, everything else dropped. Nothing of it is ever shown as markup."""
+    text = re.sub(r"(?i)<\s*(br|/p|/div|/li|/h\d)\b[^>]*>", "\n", markup or "")
+    text = re.sub(r"(?i)<\s*li\b[^>]*>", "\n• ", text)
+    text = html.unescape(re.sub(r"<[^>]*>", "", text)).replace("\xa0", " ")
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.split("\n")]
+    return "\n".join(line for line in lines if line).strip()
+
+
+def journey_notices(leg: dict) -> list:
+    """The operators' notices on a ride: [{title, text, priority}]."""
+    notices, seen = [], set()
+    for info in leg.get("infos") or []:
+        for link in info.get("infoLinks") or []:
+            title = (link.get("urlText") or link.get("subtitle") or "").strip()
+            text = plain_text(link.get("content") or link.get("htmlText") or "")
+            if not (title or text) or (title, text) in seen:
+                continue
+            seen.add((title, text))
+            notices.append({"title": title, "text": text if text != title else "", "priority": info.get("priority") or "normal"})
+    return notices
+
+
+# A leg's way on the map is drawn with the points that matter: a bend of
+# less than this (degrees, about 10 m) is not seen even at street level. EFA
+# sends every few metres (Freiburg - Konstanz: 41,542 points, 1 MB).
+PATH_TOLERANCE = 0.0001
+
+
+def path_of(leg: dict) -> list:
+    """The leg's way on the map: [[lat, lon], ...], simplified."""
+    points = []
+    for coord in leg.get("coords") or []:
+        lat, lon = lat_lon(coord)
+        if lat is not None and (not points or points[-1] != [lat, lon]):
+            points.append([lat, lon])
+    return simplify(points, PATH_TOLERANCE)
+
+
+def simplify(points: list, tolerance: float) -> list:
+    """Douglas-Peucker: the fewest points that keep the line within
+    `tolerance` of the original."""
+    if len(points) < 3:
+        return points
+    keep = [False] * len(points)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(points) - 1)]
+    while stack:
+        first, last = stack.pop()
+        (ay, ax), (by, bx) = points[first], points[last]
+        dy, dx = by - ay, bx - ax
+        length = (dx * dx + dy * dy) ** 0.5
+        far, index = 0.0, None
+        for i in range(first + 1, last):
+            py, px = points[i]
+            distance = abs(dy * (px - ax) - dx * (py - ay)) / length if length else ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5
+            if distance > far:
+                far, index = distance, i
+        if index is not None and far > tolerance:
+            keep[index] = True
+            stack.append((first, index))
+            stack.append((index, last))
+    return [point for point, kept in zip(points, keep) if kept]
+
+
+def change_minutes_needed(walk: dict | None, arriving: dict, leaving: dict) -> int:
+    """The least time a change takes: the walk's own minutes, else a little
+    more for another platform than for the same one."""
+    if walk is not None:
+        return walk["minutes"]
+    same = arriving["id"] == leaving["id"] and arriving["platform"]["code"] == leaving["platform"]["code"]
+    return CHANGE_SAME_PLATFORM_MINUTES if same else CHANGE_OTHER_PLATFORM_MINUTES
+
+
+def parse_journey(journey: dict, importance: dict | None = None) -> dict | None:
+    """One connection: {id, departure, arrival, minutes, changes, dticket,
+    legs: [...], transfers: [...]}. None if it can't be read."""
+    raw_legs = [leg for leg in journey.get("legs") or [] if isinstance(leg, dict)]
+    if not raw_legs:
+        return None
+    city = locality(raw_legs[0].get("origin") or {})
+    legs = []
+    for leg in raw_legs:
+        start = journey_place(leg.get("origin") or {}, city, arriving=False)
+        end = journey_place(leg.get("destination") or {}, city, arriving=True)
+        if is_walk(leg):
+            seconds = leg.get("duration") or 0
+            legs.append({"kind": "walk", "minutes": max(1, round(seconds / 60)) if seconds else 0,
+                         "metres": leg.get("distance"), "from": start, "to": end, "path": path_of(leg)})
+            continue
+        event = leg_as_event(leg)
+        ride = parse_departure(event, importance=importance)
+        stops = trip_stops((leg.get("stopSequence") or [])[1:-1], city, arriving=True, skip=start["id"], mode=ride["mode"])
+        legs.append({
+            "kind": "ride",
+            "line": ride["line"],
+            "mode": ride["mode"],
+            "brand": ride["brand"],
+            "destination": ride["destination"],
+            "dticket": ride["dticket"],
+            "replacement": ride["replacement"],
+            # the same ride on the departure board of the stop it leaves from
+            # (`board_stop`): GET /stops/{board_stop}/departures/{departure_id}/stops
+            "departure_id": ride["id"],
+            "board_stop": station_of(leg.get("origin") or {}).get("id") if start["has_board"] else None,
+            "from": start,
+            "to": end,
+            "stops": stops,
+            "path": path_of(leg),
+            "notices": journey_notices(leg),
+        })
+    rides = [leg for leg in legs if leg["kind"] == "ride"]
+    transfers = []
+    for i, leg in enumerate(legs):
+        if leg["kind"] != "ride":
+            continue
+        later = [j for j in range(i + 1, len(legs)) if legs[j]["kind"] == "ride"]
+        if not later:
+            break
+        nxt = legs[later[0]]
+        walks = [legs[j] for j in range(i + 1, later[0]) if legs[j]["kind"] == "walk"]
+        walk = {"minutes": sum(w["minutes"] for w in walks)} if walks else None
+        arrival, leaving = parse_time(leg["to"]["time"]), parse_time(nxt["from"]["time"])
+        needed = change_minutes_needed(walk, leg["to"], nxt["from"])
+        spare = whole_minutes(leaving - arrival) - needed if arrival and leaving else None
+        transfers.append({"at": leg["to"]["name"], "to": nxt["from"]["name"], "walk_minutes": walk["minutes"] if walk else None,
+                          "needed_minutes": needed, "spare_minutes": spare, "possible": spare is None or spare >= 0})
+    first, last = legs[0]["from"], legs[-1]["to"]
+    departure = parse_time(first["time"])
+    arrival = parse_time(last["time"])
+    key = "|".join(leg.get("departure_id") or f"walk:{leg['minutes']}" for leg in legs)
+    return {
+        "id": hashlib.sha1(key.encode()).hexdigest()[:16],
+        "departure": {"time": first["time"], "planned": first["planned"], "delay": first["delay"]},
+        "arrival": {"time": last["time"], "planned": last["planned"], "delay": last["delay"]},
+        "minutes": whole_minutes(arrival - departure) if arrival and departure else None,
+        "changes": max(0, len(rides) - 1),
+        "dticket": bool(rides) and all(r["dticket"] for r in rides),
+        "legs": legs,
+        "transfers": transfers,
+    }
+
+
+def journey_error(data: dict) -> str | None:
+    """The planner's reason for finding nothing: "too_close" (start and
+    destination are the same place), else None."""
+    for message in data.get("systemMessages") or []:
+        if isinstance(message, dict) and message.get("type") == "error" and str(message.get("code")) == "-4007":
+            return "too_close"
+    return None
+

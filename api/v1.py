@@ -16,7 +16,7 @@ from api import limits
 from efa.client import EfaError
 from efa.localtime import from_local
 from gtfs.store import StopsNotImported
-from services import departures, stops
+from services import departures, journeys, stops
 
 bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 # how often one visitor may ask (api/limits.py); switched off with the app
@@ -97,6 +97,11 @@ def chosen_time(text: str) -> datetime | None:
     return moment.astimezone(timezone.utc).replace(second=0, microsecond=0)
 
 
+@bp.errorhandler(journeys.InvalidPlace)
+def invalid_place(exc):
+    return error(400, "invalid_parameter", str(exc))
+
+
 @bp.errorhandler(StopsNotImported)
 def stops_not_imported(exc):
     return error(503, "stops_not_imported",
@@ -114,6 +119,7 @@ def index():
             "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}",
             "platform_departures": "/api/v1/stops/{stop_id}/departures?platform={platform_id}",
             "departure_stops": "/api/v1/stops/{stop_id}/departures/{departure_id}/stops",
+            "journeys": "/api/v1/journeys?from={stop_id|lat,lon}&to={stop_id|lat,lon}&when={time}&arrive={0|1}&dticket={0|1}",
         },
         # null until the stop database has been built (python import_stops.py)
         "stop_data": stops.data_info(),
@@ -142,3 +148,14 @@ def stop_departures(stop_id):
 @bp.route("/stops/<stop_id>/departures/<departure_id>/stops")
 def departure_stops(stop_id, departure_id):
     return jsonify(departures.trip(stop_id.strip(), departure_id.strip()))
+
+
+def flag(name: str) -> bool:
+    return request.args.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+@bp.route("/journeys")
+def plan_journeys():
+    return jsonify(journeys.plan(request.args.get("from", ""), request.args.get("to", ""),
+                                 start=chosen_time(request.args.get("when", "")), arrive=flag("arrive"), dticket=flag("dticket")))
+

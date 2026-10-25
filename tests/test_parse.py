@@ -600,7 +600,29 @@ class TripTest(unittest.TestCase):
     def test_id_can_be_read_back(self):
         wanted = parse.decode_departure_id(parse.departure_id(self.event()))
         self.assertEqual(wanted, {"planned": datetime(2026, 10, 1, 8, 0, tzinfo=timezone.utc),
-                                  "platform_id": "de:08111:115:1:2"})
+                                  "platform_id": "de:08111:115:1:2", "line_id": "vvs:20006: :H:j26", "trip": "77"})
+
+    def test_a_station_level_id_finds_the_ride_at_any_platform(self):
+        # a journey's ride whose platform the planner doesn't know yet (only the
+        # station's id): the same time, line and trip on the board is that ride
+        from services.departures import same_ride
+        board = self.event()
+        board_id = parse.departure_id(board)
+        station_only = parse.departure_id({**board, "location": {**board["location"], "id": "de:08111:115"}})
+        wanted = parse.decode_departure_id(station_only)
+        self.assertTrue(same_ride(board_id, station_only, wanted))
+        later = parse.departure_id({**board, "departureTimePlanned": "2026-10-01T08:10:00Z"})
+        self.assertFalse(same_ride(later, station_only, wanted))
+        other_station = parse.departure_id({**board, "location": {**board["location"], "id": "de:08111:6115:1:2"}})
+        self.assertFalse(same_ride(other_station, station_only, wanted))
+        # ... and an id naming another platform of the same station (the
+        # planner's 3:3 where the board has 3:2, or a train moved): the same ride
+        exact = parse.decode_departure_id(board_id)
+        other_platform = parse.departure_id({**board, "location": {**board["location"], "id": "de:08111:115:1:1"}})
+        self.assertTrue(same_ride(other_platform, board_id, exact))
+        # another trip number at the same time and line is another ride
+        other_trip = parse.departure_id({**board, "transportation": {**board["transportation"], "properties": {"tripCode": 78}}})
+        self.assertFalse(same_ride(other_trip, board_id, exact))
 
     def test_anything_else_is_not_an_id(self):
         for junk in ("", "nonsense", "!!!", "ä", "YXxi", "MjAyNi0xMC0wMVQwODowMDowMFp8fHw", "x" * 500):
