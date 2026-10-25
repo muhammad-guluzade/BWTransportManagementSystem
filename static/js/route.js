@@ -21,8 +21,11 @@
   const screensList = document.querySelector('#screens-bar [data-screen="list"]');
   const wide = window.matchMedia('(min-width: 1024px)');
   const summary = document.getElementById('route-summary');
-  // phones: the form is folded into one line while connections are shown, unless being changed
-  let editing = false;
+  const goButton = document.getElementById('route-go');
+  // phones: the form folded into one line (after a search, a touch of the map, or its fold button)
+  let folded = false;
+  // phones: the map was touched: the sheet is just its grip, with nothing written on it
+  let quiet = false;
   const tools = window.when.tools;
 
   // the list of connections is asked again this often while it is on screen
@@ -92,6 +95,8 @@
     scrollOf[mode] = panelBox.scrollTop;
     mode = next;
     const route = mode === 'route';
+    quiet = false;
+    if (route && !(ends.from && ends.to)) folded = false;   // the form open, to choose From and To
     document.body.classList.toggle('route-mode', route);
     switchBox.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
     form.hidden = !route;
@@ -164,7 +169,7 @@
     row.setAttribute('role', 'option');
     row.appendChild(el('span', 'result-name', text));
     if (detail) row.appendChild(el('span', 'result-types', detail));
-    row.onclick = () => choose(end, place, { next: true });
+    row.onclick = () => choose(end, place, { keys: true });
     f.rows.push(place);
     f.list.appendChild(row);
     return row;
@@ -224,7 +229,7 @@
     f.input.setAttribute('aria-expanded', String(f.rows.length > 0));
     if (f.waiting && f.waiting === typed) {
       f.waiting = '';
-      if (f.rows.length) choose(end, f.rows[0], { next: true });
+      if (f.rows.length) choose(end, f.rows[0], { keys: true });
     }
   }
 
@@ -242,11 +247,8 @@
     const f = fields[end];
     f.input.addEventListener('focus', () => {
       const place = ends[end];
-      // the chosen place stays as a grey hint while something else is typed
-      if (place && (f.input.value === place.name || place.locating)) {
-        f.input.placeholder = place.locating ? 'My location' : place.name;
-        f.input.value = '';
-      }
+      // the chosen place stays written, selected: typing replaces it, Enter keeps it
+      if (place && f.input.value === place.name) setTimeout(() => { if (document.activeElement === f.input) f.input.select(); }, 0);
       showField(end);
       if (f.input.value.trim() === '') suggest(end);
     });
@@ -273,9 +275,16 @@
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const typed = f.input.value.trim();
-        if (f.marked >= 0 && f.rows[f.marked]) { choose(end, f.rows[f.marked], { next: true }); return; }
+        if (f.marked >= 0 && f.rows[f.marked]) { choose(end, f.rows[f.marked], { keys: true }); return; }
+        // the chosen place is in the box as it was: From goes on to To, To asks for the connections
+        if (ends[end] && (typed === '' || typed === ends[end].name || ends[end].locating)) {
+          closeLists();
+          if (end === 'from') fields.to.input.focus();
+          else search();
+          return;
+        }
         if (typed.length < 2) return;
-        if (f.shownFor === typed) { if (f.rows.length) choose(end, f.rows[0], { next: true }); return; }
+        if (f.shownFor === typed) { if (f.rows.length) choose(end, f.rows[0], { keys: true }); return; }
         f.waiting = typed;
         clearTimeout(f.timer);
         find(end, f.input.value.replace(/^\s+/, ''));
@@ -295,16 +304,21 @@
     if (!e.target.closest('.route-field')) closeLists();
   });
 
-  // `next`: after the start, the destination's field is ready for typing
-  function choose(end, place, { next = false } = {}) {
+  // Choosing a place never shows connections by itself (the user's rule): they
+  // come with Enter / the search key in To, or the Search button.
+  // `keys`: chosen in the field's list: From goes on to To (whose place, if
+  // any, is shown as it is); To keeps the keyboard, ready for Enter / search.
+  function choose(end, place, { keys = false } = {}) {
     const f = fields[end];
     closeLists();
     ends[end] = { ...place };
     if (document.activeElement === f.input) f.input.blur();
     showField(end);
-    if (place.kind === 'me') { locate(end); return; }
     changed();
-    if (next && !ends[OTHER[end]]) fields[OTHER[end]].input.focus();
+    if (place.kind === 'me') locate(end);
+    if (!keys) return;
+    if (end === 'from') fields.to.input.focus();
+    else f.input.focus();
   }
 
   // "My location": the device is asked where it is (the browser asks the user first)
@@ -317,16 +331,16 @@
       if (ends[end] !== place) return;
       ends[end] = null;
       showField(end);
+      searchWanted = false;
+      changed();
       state = 'problem';
       problem = { message, retry: false };
-      changed(false);
+      renderAll();
     };
     if (!window.isSecureContext || !navigator.geolocation) {
       fail('Your location can only be used when the page is opened over a secure connection (https), as on the public site.');
       return;
     }
-    // the connections are looked for once the place is known
-    if (ends[OTHER[end]]) { searchId++; journeys = []; openId = null; state = 'loading'; document.dispatchEvent(new CustomEvent('route-searched')); }
     renderAll();
     navigator.geolocation.getCurrentPosition((position) => {
       if (ends[end] !== place) return;   // something else was chosen meanwhile
@@ -334,7 +348,8 @@
       place.lat = position.coords.latitude;
       place.lon = position.coords.longitude;
       showField(end);
-      changed();
+      // Enter / Search was pressed while it was being found: now the connections
+      if (searchWanted) { searchWanted = false; search(); } else renderAll();
     }, (error) => {
       fail(error.code === 1 ? 'This page may not use your location. Allow it in the browser\'s settings, or type a stop or a place.'
         : error.code === 3 ? 'Finding your location took too long. Try again, or type a stop or a place.'
@@ -346,14 +361,14 @@
     [ends.from, ends.to] = [ends.to, ends.from];
     showField('from');
     showField('to');
-    changed();
+    changed({ again: true });
   });
 
   dticketBox.checked = dticket;
   dticketBox.addEventListener('change', () => {
     dticket = dticketBox.checked;
     try { localStorage.setItem('dticketOnly', dticket ? '1' : '0'); } catch { /* not remembered */ }
-    changed();
+    changed({ again: true });
   });
 
   // ---------- the time ----------
@@ -412,7 +427,7 @@
     time.value = value;
     time.arrive = arriveChoice;
     drawChip();
-    changed();
+    changed({ again: true });
   }
   chip.addEventListener('click', openTime);
   timeButtons.forEach(b => b.addEventListener('click', () => {
@@ -424,7 +439,7 @@
     time.value = null;
     time.arrive = false;
     drawChip();
-    changed();
+    changed({ again: true });
   });
   document.getElementById('route-when-close').addEventListener('click', closeTime);
   document.getElementById('route-when-show').addEventListener('click', takeTime);
@@ -488,8 +503,12 @@
       || (a.arrival.time || '').localeCompare(b.arrival.time || ''));
   }
 
-  // start, destination, time or the switch changed: a new search (or back to the hint)
-  function changed(searchNow = true) {
+  // Start, destination, time or the switch changed: the connections shown are
+  // gone. `again`: a list that was on screen is asked for anew at once (swap,
+  // time, D-Ticket); a new place waits for Enter / Search.
+  let searchWanted = false;   // asked for while "My location" was still being found
+  function changed({ again = false, plan = false } = {}) {
+    const listed = state === 'loading' || state === 'ready' || state === 'error';
     searchId++;
     loadingMore = null;
     moreNote = { earlier: '', later: '' };
@@ -501,28 +520,37 @@
     empty = null;
     updatedAt = null;
     updateProblem = '';
-    if (searchNow) {
-      problem = null;
-      state = 'idle';
-      if (ready()) {
-        if (samePlace(ends.from, ends.to)) { state = 'problem'; problem = { message: 'Start and destination are the same.', retry: false }; }
-        else {
-          pages = [{ when: time.value, arrive: time.arrive && Boolean(time.value) }];
-          load(false);
-          return;
-        }
+    problem = null;
+    state = 'idle';
+    if ((plan || (again && listed)) && ready()) {
+      if (samePlace(ends.from, ends.to)) { state = 'problem'; problem = { message: 'Start and destination are the same.', retry: false }; }
+      else {
+        pages = [{ when: time.value, arrive: time.arrive && Boolean(time.value) }];
+        load(false);
+        return;
       }
     }
     renderAll();
     document.dispatchEvent(new CustomEvent('route-changed'));
   }
 
+  // Enter / the search key in To, or the Search button: the connections
+  function search() {
+    closeLists();
+    if (locating()) { searchWanted = true; return; }
+    if (!ends.from || !ends.to) { fields[ends.from ? 'to' : 'from'].input.focus(); return; }
+    if (document.activeElement && form.contains(document.activeElement)) document.activeElement.blur();   // (phones: the keyboard goes)
+    changed({ plan: true });
+  }
+  goButton.addEventListener('click', search);
+
   // asks for every page of this search; `refreshing`: the list stays while it loads
   async function load(refreshing) {
     const search = searchId;
     const request = ++loadCounter;
     if (!refreshing) {
-      editing = false;
+      folded = true;
+      quiet = false;
       state = 'loading';
       renderAll();
       // on a phone the sheet comes up for the list (sheet.js)
@@ -622,30 +650,46 @@
     drawn();
   }
 
-  // phones: the form as one line ("Pragfriedhof → Museum", the time) while connections are shown
+  // Phones: the form as one line ("Pragfriedhof → Museum", the time) after a
+  // search, a touch of the map, or its fold button; a tap on the line opens it.
   function fold() {
-    const folded = mode === 'route' && !wide.matches && !editing && Boolean(ends.from && ends.to) && state !== 'idle';
-    document.body.classList.toggle('route-compact', folded);
+    goButton.disabled = !(ends.from && ends.to);
+    document.body.classList.toggle('route-compact', mode === 'route' && !wide.matches && folded);
+    document.body.classList.toggle('route-quiet', mode === 'route' && !wide.matches && quiet);
     summary.innerHTML = '';
-    if (!ends.from || !ends.to) return;
-    summary.appendChild(el('span', 'route-summary-places', `${nameOf(ends.from)} → ${nameOf(ends.to)}`));
-    summary.appendChild(el('span', 'route-summary-time', `${chip.textContent}${dticket ? ' · D-Ticket only' : ''}`));
+    const places = ends.from && ends.to ? `${nameOf(ends.from)} → ${nameOf(ends.to)}`
+      : ends.from ? `${nameOf(ends.from)} → ?` : ends.to ? `? → ${nameOf(ends.to)}` : 'Plan a journey';
+    summary.appendChild(el('span', 'route-summary-places', places));
+    summary.appendChild(el('span', 'route-summary-time', ends.from && ends.to
+      ? `${chip.textContent}${dticket ? ' · D-Ticket only' : ''}` : 'Tap to choose From and To'));
   }
-  summary.addEventListener('click', () => { editing = true; fold(); });
-  // touching the map or the list folds it again (a field in use keeps it open)
-  const foldAgain = () => {
-    if (!editing || form.contains(document.activeElement)) return;
-    editing = false;
+  summary.addEventListener('click', () => { folded = false; fold(); });
+  document.getElementById('route-hide').addEventListener('click', () => { closeLists(); folded = true; fold(); });
+  // The map touched (a tap or a drag) in Route mode: the map is wanted. The
+  // form folds (unless a field is in use) and the sheet's bar says nothing,
+  // until the sheet is opened again or connections come.
+  document.addEventListener('map-touched', () => {
+    if (mode !== 'route' || wide.matches) return;
+    if (!form.contains(document.activeElement)) folded = true;
+    quiet = true;
     fold();
-  };
-  document.addEventListener('map-touched', foldAgain);
-  document.getElementById('panel').addEventListener('touchstart', foldAgain, { passive: true });
+  });
+  document.addEventListener('sheet-changed', () => {
+    if (quiet && window.sheet && window.sheet.state() !== 'peek') { quiet = false; fold(); }
+  });
+  // touching the list while the form is open folds it too (a field in use keeps it open)
+  document.getElementById('panel').addEventListener('touchstart', () => {
+    if (mode !== 'route' || folded || form.contains(document.activeElement) || state === 'idle') return;
+    folded = true;
+    fold();
+  }, { passive: true });
   wide.addEventListener('change', fold);
 
   const nameOf = place => (place ? place.name : '');
   const locating = () => Boolean((ends.from && ends.from.locating) || (ends.to && ends.to.locating));
 
   function statusText() {
+    if (state === 'idle' && ends.from && ends.to) return locating() ? 'Finding your location...' : 'Ready: press Search to see the connections.';
     if (state === 'idle') return 'Type a stop, a place or an address, use your location, or tap the map.';
     if (state === 'loading') return locating() ? 'Finding your location...' : 'Looking for connections...';
     if (state === 'error' || state === 'problem') return problem.message;
@@ -696,6 +740,11 @@
   function renderBoard() {
     routeBoard.innerHTML = '';
     if (mode !== 'route') return;
+    if (state === 'idle' && ends.from && ends.to) {
+      routeBoard.appendChild(notice(locating() ? 'Finding your location...'
+        : 'Press Search (or Enter, or the keyboard\'s search key in To) to see the connections.', 'notice route-hint'));
+      return;
+    }
     if (state === 'idle') {
       const box = notice('Where do you want to go?', 'notice route-hint');
       const how = el('ul');
@@ -733,19 +782,22 @@
               : 'No connections found for this time. Try another time.'));
       return;
     }
-    routeBoard.appendChild(moreButton('earlier'));
+    routeBoard.appendChild(moreButtons());
     journeys.forEach(j => routeBoard.appendChild(card(j)));
-    routeBoard.appendChild(moreButton('later'));
   }
 
-  function moreButton(direction) {
+  // Earlier and Later side by side, above the connections (the user's wish)
+  function moreButtons() {
     const box = el('div', 'route-more-box');
-    const button = el('button', 'route-more', loadingMore === direction ? 'Loading...' : direction === 'earlier' ? 'Earlier' : 'Later');
-    button.type = 'button';
-    button.disabled = Boolean(loadingMore);
-    button.onclick = () => more(direction);
-    box.appendChild(button);
-    if (moreNote[direction]) box.appendChild(el('span', 'route-more-note', moreNote[direction]));
+    ['earlier', 'later'].forEach(direction => {
+      const button = el('button', 'route-more', loadingMore === direction ? 'Loading...' : direction === 'earlier' ? 'Earlier' : 'Later');
+      button.type = 'button';
+      button.dataset.more = direction;
+      button.disabled = Boolean(loadingMore);
+      button.onclick = () => more(direction);
+      box.appendChild(button);
+    });
+    ['earlier', 'later'].forEach(direction => { if (moreNote[direction]) box.appendChild(el('span', 'route-more-note', moreNote[direction])); });
     return box;
   }
 
@@ -819,6 +871,7 @@
   // opens a connection (null: closes it); the map draws its route
   function toggle(id) {
     openId = id;
+    quiet = false;
     openStops.clear();
     openNotices.clear();
     renderAll();
@@ -986,7 +1039,11 @@
   // "Route from here" / "Route to here" on a stop's departures, and the map's popup
   function startWith(end, place) {
     setMode('route');
-    choose(end, place, { next: wide.matches });
+    folded = false;
+    choose(end, place);
+    // the other end is next (a phone's keyboard only comes with a tap in it)
+    if (wide.matches && !ends[OTHER[end]]) fields[OTHER[end]].input.focus();
+    fold();
   }
 
   drawChip();
@@ -1000,6 +1057,9 @@
     openId: () => openId,
     close: () => toggle(null),
     choose: (end, place) => choose(end, place),
+    search,
+    folded: () => folded,
+    quiet: () => quiet,
     startWith,
     ends: () => ({ from: ends.from, to: ends.to }),
     journeys: () => journeys,

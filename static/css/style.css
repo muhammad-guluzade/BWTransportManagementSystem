@@ -345,6 +345,11 @@ body.route-mode #search-box { display: none; }
   color: var(--accent); font-size: 20px; line-height: 38px; cursor: pointer; }
 .route-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 8px; }
 #route-summary { display: none; }
+/* the connections are asked for only with this button (or the keyboard's Enter / search key in To) */
+#route-go { height: 30px; padding: 0 16px; border: none; border-radius: 15px; background: var(--accent); color: var(--card); font-size: 0.85rem;
+  font-weight: 600; cursor: pointer; }
+#route-go:disabled { opacity: 0.4; cursor: default; }
+#route-hide { display: none; }
 #route-when-chip { height: 30px; padding: 0 14px; border: none; border-radius: 15px; background: var(--accent-soft); color: var(--text); font-size: 0.85rem;
   font-weight: 600; cursor: pointer; }
 #route-when-chip::after { content: ' \25BE'; color: var(--muted); font-weight: 400; }
@@ -385,7 +390,7 @@ body.route-mode #panel-close { display: none !important; }
 #route-board .notice { margin-top: 12px; }
 #route-board .notice p { margin: 10px 0; }
 .route-hint ul { margin: 0 0 12px; }
-.route-more-box { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.route-more-box { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 10px; }
 .route-more { flex-shrink: 0; padding: 7px 18px; border: none; border-radius: 15px; background: var(--accent-soft); color: var(--accent); font-size: 0.85rem;
   font-weight: 600; cursor: pointer; }
 .route-more:disabled { opacity: 0.6; cursor: default; }
@@ -496,6 +501,10 @@ body.route-mode #panel-close { display: none !important; }
   .route-results { max-height: 50vh; }
   /* with connections shown the form folds into one line, so the map keeps its room */
   body.route-compact .route-places, body.route-compact .route-opts { display: none; }
+  #route-hide { display: block; margin-left: auto; width: 30px; height: 30px; padding: 0; border: none; border-radius: 50%; background: var(--accent-soft);
+    color: var(--muted); font-size: 14px; line-height: 30px; cursor: pointer; }
+  /* the map was touched in Route mode: the sheet is only its grip, nothing written on it */
+  body.route-quiet.sheet-peek #route-head { display: none; }
   body.route-compact #route-summary { display: grid; gap: 1px; width: 100%; padding: 7px 14px; border: 1px solid var(--line); border-radius: 12px;
     background: var(--bg); color: var(--text); text-align: left; cursor: pointer; }
   #route-summary .route-summary-places { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }

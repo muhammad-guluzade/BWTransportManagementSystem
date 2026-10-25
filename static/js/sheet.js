@@ -230,8 +230,10 @@
   // a tap on the empty map: the user wants the map (dragging it only looks
   // around); the two screens' map is already the map
   // (in Route mode a tap asks "from here or to here?" instead: map.js)
+  // (in Route mode a tap or a drag: the map is wanted, the sheet goes down; route.js clears its bar)
   document.addEventListener('map-touched', (e) => {
-    if (e.detail.kind === 'tap' && !screens() && state !== 'peek' && !routeMode()) setState('peek');
+    if (screens() || state === 'peek') return;
+    if (routeMode() || e.detail.kind === 'tap') setState('peek');
   });
   // Route mode: connections are being looked for: the sheet comes up for them
   document.addEventListener('route-searched', () => {
