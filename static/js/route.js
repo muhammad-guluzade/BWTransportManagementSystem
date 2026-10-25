@@ -99,7 +99,8 @@
     routeBoard.hidden = !route;
     screensList.textContent = route ? 'Connections' : 'Departures';
     closeLists();
-    if (route) { renderHead(); renderBoard(); }
+    renderHead();
+    renderBoard();
     document.dispatchEvent(new CustomEvent('mode-changed', { detail: { mode } }));
     panelBox.scrollTop = scrollOf[mode];
     drawn();
@@ -653,8 +654,10 @@
     return updateProblem ? `${count} · Could not update: ${updateProblem}` : `${count} · Updated ${clockFormat.format(now)}${germanTimeNote(now)}`;
   }
 
+  // (the panel's Route part is filled only in Route mode: hidden content would still be in the page)
   function renderHead() {
     head.innerHTML = '';
+    if (mode !== 'route') return;
     if (ends.from && ends.to) {
       const title = el('h2', 'route-title');
       title.appendChild(el('span', '', nameOf(ends.from)));
@@ -692,6 +695,7 @@
 
   function renderBoard() {
     routeBoard.innerHTML = '';
+    if (mode !== 'route') return;
     if (state === 'idle') {
       const box = notice('Where do you want to go?', 'notice route-hint');
       const how = el('ul');
