@@ -779,20 +779,20 @@ function renderStation(data) {
     if (window.mine.isFavouriteStop(data.stop.id)) window.mine.remove(favourite);
     else window.mine.add(favourite);
   }));
-  stationBox.appendChild(name);
-
-  // the navigator: a journey from or to this stop (route.js)
+  // the navigator (the user's choice 1B): one button by the name, "Route to here";
+  // the start is chosen in the form, My location offered first (route.js)
   if (window.route) {
-    const links = el('div', 'route-links');
-    const place = { kind: 'stop', id: data.stop.id, name: data.stop.name, lat: data.stop.lat, lon: data.stop.lon };
-    [['from', 'Route from here'], ['to', 'Route to here']].forEach(([end, text]) => {
-      const button = el('button', '', text);
-      button.type = 'button';
-      button.onclick = (e) => { e.stopPropagation(); window.route.startWith(end, place); };
-      links.appendChild(button);
-    });
-    stationBox.appendChild(links);
+    const toHere = el('button', 'route-here');
+    toHere.type = 'button';
+    toHere.title = 'Route to here';
+    toHere.setAttribute('aria-label', 'Route to here');
+    toHere.onclick = (e) => {
+      e.stopPropagation();
+      window.route.startWith('to', { kind: 'stop', id: data.stop.id, name: data.stop.name, lat: data.stop.lat, lon: data.stop.lon });
+    };
+    name.appendChild(toHere);
   }
+  stationBox.appendChild(name);
 
   // when the board is empty, or only has departures days ahead, the nearby
   // stations are part of the notice on the board instead

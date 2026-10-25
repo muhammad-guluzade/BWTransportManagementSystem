@@ -57,6 +57,15 @@ button { font: inherit; color: inherit; }
   border: none; border-radius: 50%; background: none; color: var(--faint); font-size: 18px; line-height: 32px; cursor: pointer; }
 #search-clear:hover { color: var(--text); background: var(--accent-soft); }
 #search-box.has-text #search-clear { display: block; }
+/* the route icon: in the search box (phones), and by a stop's name ("Route to here") */
+#route-open::before, .route-here::before { content: ''; display: block; width: 20px; height: 20px; margin: auto; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 20v-6a4 4 0 0 1 4-4h9'/%3E%3Cpath d='M15 6l4 4-4 4'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 20v-6a4 4 0 0 1 4-4h9'/%3E%3Cpath d='M15 6l4 4-4 4'/%3E%3C/svg%3E") center / contain no-repeat; }
+#route-open { display: none; }
+#route-back { display: none; }
+.route-here { flex-shrink: 0; width: 32px; height: 32px; padding: 0; border: none; border-radius: 50%; background: none; color: var(--accent);
+  vertical-align: middle; cursor: pointer; }
+.route-here:hover { background: var(--accent-soft); }
+.station-name .route-here { margin: -4px 0 -4px 0; }
 .results { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 2000; max-height: min(60vh, 440px); overflow-y: auto;
   background: var(--card); border-radius: 14px; box-shadow: 0 6px 24px var(--shade); }
 .results:empty { display: none; }
@@ -459,10 +468,6 @@ body.route-mode #panel-close { display: none !important; }
 .route-end.to span { background: #1d2228; border-color: #fff; box-shadow: 0 0 0 2px #1d2228, 0 1px 4px rgba(0, 0, 0, 0.45); }
 .route-end.me span { background: #1a73e8; border-color: #fff; box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.35), 0 1px 4px rgba(0, 0, 0, 0.45); }
 /* "Route from here / to here" on a stop's departures */
-.route-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.route-links button { padding: 3px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); color: var(--accent); font-size: 0.8rem;
-  font-weight: 600; cursor: pointer; }
-.route-links button:hover { border-color: var(--accent); }
 
 /* ---------- wide screens: search bar on top, map left, panel right ---------- */
 @media (min-width: 1024px) {
@@ -492,11 +497,19 @@ body.route-mode #panel-close { display: none !important; }
   #top { position: fixed; top: 0; left: 0; right: 0; z-index: 1500; display: flex; flex-direction: column; gap: 8px;
     padding: calc(10px + env(safe-area-inset-top, 0px)) 12px 10px; pointer-events: none; }
   #search-box { max-width: none; pointer-events: auto; }
-  /* the two modes: a small switch above the search box; in Route mode the bar is a card with the form */
-  #mode-switch { align-self: center; width: min(260px, 100%); background: var(--card); box-shadow: 0 1px 4px var(--shade); pointer-events: auto; }
-  #mode-switch button { padding: 4px 0; }
+  /* the two modes (the user's choice 2A): no switch; a route icon in the search box, and in Route
+     mode a "‹" beside the form goes back. In Route mode the bar is a card with the form. */
+  #mode-switch { display: none; }
+  #stop-input { padding-right: 76px; }
+  #route-open { display: block; position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; padding: 0;
+    border: none; border-radius: 50%; background: var(--accent-soft); color: var(--accent); cursor: pointer; }
+  #search-clear { right: 42px; }
   body.route-mode #top { background: var(--card); box-shadow: 0 2px 10px var(--shade); pointer-events: auto; }
-  body.route-mode #mode-switch { width: 100%; background: var(--bg); box-shadow: none; }
+  #route-form:not([hidden]) { display: grid; grid-template-columns: 30px minmax(0, 1fr); column-gap: 6px; row-gap: 8px; }
+  #route-form > * { grid-column: 2; }
+  #route-back { display: block; grid-column: 1; grid-row: 1; align-self: center; width: 30px; height: 30px; padding: 0; border: none; border-radius: 50%;
+    background: none; color: var(--muted); font-size: 26px; line-height: 26px; cursor: pointer; }
+  #route-back:hover { color: var(--text); background: var(--accent-soft); }
   .route-opts { margin-top: 0; }
   .route-results { max-height: 50vh; }
   /* with connections shown the form folds into one line, so the map keeps its room */
@@ -532,8 +545,8 @@ body.route-mode #panel-close { display: none !important; }
   /* the head's parts in the order the small bar needs: grip, name, next departure; then the rest */
   #panel-head { position: sticky; top: 0; z-index: 3; display: flex; flex-direction: column; margin: 0 -14px; padding: 0 14px 8px; border-radius: 18px 18px 0 0; }
   #station { display: contents; }
-  #sheet-grip { order: 0; } .station-name { order: 1; } #route-head { order: 1; } #peek { order: 2; } .nearby, .route-links { order: 3; } #panel-head .tabs, #panel-head .line-chips { order: 4; } #when-bar { order: 5; } #status { order: 6; }
-  body.sheet-peek #panel-head .nearby, body.sheet-peek #panel-head .route-links, body.sheet-peek #panel-head .tabs, body.sheet-peek #panel-head .line-chips, body.sheet-peek #station:not(:empty) ~ #status, body.sheet-peek #when-bar { display: none; }
+  #sheet-grip { order: 0; } .station-name { order: 1; } #route-head { order: 1; } #peek { order: 2; } .nearby { order: 3; } #panel-head .tabs, #panel-head .line-chips { order: 4; } #when-bar { order: 5; } #status { order: 6; }
+  body.sheet-peek #panel-head .nearby, body.sheet-peek #panel-head .tabs, body.sheet-peek #panel-head .line-chips, body.sheet-peek #station:not(:empty) ~ #status, body.sheet-peek #when-bar { display: none; }
   /* the grip: a wide, tall strip to grab, with the bar drawn in its middle */
   #sheet-grip { display: block; width: 100%; height: 30px; margin: 0; padding: 0; border: none; background: none; cursor: grab; touch-action: none; }
   #sheet-grip::before { content: ''; display: block; width: 48px; height: 5px; margin: 11px auto 0; border-radius: 3px; background: var(--grip); }

@@ -122,6 +122,9 @@
     const button = e.target.closest('button[data-mode]');
     if (button) setMode(button.dataset.mode);
   });
+  // phones: the route icon in the search box, and "‹" back beside the form
+  document.getElementById('route-open').addEventListener('click', (e) => { e.stopPropagation(); setMode('route'); });
+  document.getElementById('route-back').addEventListener('click', () => setMode('departures'));
 
   // ---------- From and To ----------
   const fields = {};
@@ -1037,13 +1040,22 @@
 
   // ---------- from elsewhere ----------
   // "Route from here" / "Route to here" on a stop's departures, and the map's popup
+  // "Route to here" on a stop: Route mode with that destination; the start is
+  // chosen next: on a laptop its field is ready for typing, on a phone its list
+  // (My location first, then the recent stops) is open, and a tap in the field
+  // brings the keyboard
   function startWith(end, place) {
     setMode('route');
     folded = false;
     choose(end, place);
-    // the other end is next (a phone's keyboard only comes with a tap in it)
-    if (wide.matches && !ends[OTHER[end]]) fields[OTHER[end]].input.focus();
     fold();
+    const other = OTHER[end];
+    if (ends[other]) return;
+    setTimeout(() => {   // (after the click that got here: it would close the list again)
+      if (mode !== 'route') return;
+      if (wide.matches) fields[other].input.focus();
+      else suggest(other);
+    }, 0);
   }
 
   drawChip();

@@ -43,10 +43,14 @@
     <input type="search" id="stop-input" placeholder="Search a stop" autocomplete="off" enterkeyhint="search" aria-label="Search a stop"
            role="combobox" aria-controls="results" aria-expanded="false" aria-autocomplete="list">
     <button type="button" id="search-clear" aria-label="Clear the search">&#x2715;</button>
+    <!-- phones: Route mode (the laptop has the switch beside the search) -->
+    <button type="button" id="route-open" aria-label="Plan a journey" title="Plan a journey"></button>
     <div id="results" class="results" role="listbox"></div>
   </div>
   <!-- Route mode (route.js): start and destination, the time, D-Ticket only -->
   <div id="route-form" hidden>
+    <!-- phones: back to the departures -->
+    <button type="button" id="route-back" aria-label="Back to departures" title="Back to departures">&#x2039;</button>
     <!-- phones, once connections are shown: the form folded into one line; a tap opens it again -->
     <button type="button" id="route-summary" aria-label="Change start, destination or time"></button>
     <div class="route-places">
