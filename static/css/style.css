@@ -427,7 +427,6 @@ body.route-mode #panel-close { display: none !important; }
 .conn-gone { color: var(--faint); }
 /* opened: the journey from top to bottom, a coloured line through its stops (dashed: on foot) */
 .conn-details { padding: 0 12px 12px; border-top: 1px solid var(--line); }
-.conn-details .stops-map { margin-top: 10px; }
 .legs { display: grid; padding-top: 12px; }
 .step { display: grid; grid-template-columns: 48px 18px minmax(0, 1fr); column-gap: 8px; font-variant-numeric: tabular-nums; }
 .step .t { text-align: right; font-weight: 700; font-size: 0.9rem; padding-top: 1px; }
@@ -453,6 +452,13 @@ body.route-mode #panel-close { display: none !important; }
 .route-notice.high summary { font-weight: 600; }
 .route-notice p { margin: 6px 0 2px; white-space: pre-line; }
 /* the map's question in Route mode: from here or to here? */
+/* closing an opened connection: a labelled button, in its bar and in the connection itself */
+.route-close { flex-shrink: 0; padding: 5px 12px; border: 1px solid var(--line); border-radius: 15px; background: var(--card); color: var(--text);
+  font-size: 0.82rem; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.route-close:hover { border-color: var(--accent); color: var(--accent); }
+.conn-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.conn-actions .stops-map { margin: 0; }
+.conn-actions .route-close { margin-left: auto; }
 .route-pop { display: grid; gap: 8px; min-width: 170px; font: 14px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
 .route-pop-name { font-weight: 650; }
 .route-pop-buttons { display: flex; gap: 6px; }
@@ -578,9 +584,9 @@ body.route-mode #panel-close { display: none !important; }
   #peek .destination { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #peek .countdown { font-size: 0.95rem; }
   /* Route mode's small bar: the open connection, or the next one; the status line only when open */
-  body.sheet-peek .route-peek { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; cursor: pointer; }
+  body.sheet-peek .route-peek { display: flex; align-items: center; gap: 10px; margin-top: 6px; cursor: pointer; }
+  .route-peek-what { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; flex: 1; min-width: 0; }
   .route-peek .conn-times { font-size: 0.95rem; }
-  .route-peek .peek-close { margin-left: auto; }
   .route-peek-text { color: var(--muted); font-size: 0.88rem; }
   body.sheet-peek .route-status { display: none; }
   #route-head { padding-right: 72px; }

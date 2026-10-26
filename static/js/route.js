@@ -173,7 +173,8 @@
     row.setAttribute('role', 'option');
     row.appendChild(el('span', 'result-name', text));
     if (detail) row.appendChild(el('span', 'result-types', detail));
-    row.onclick = () => choose(end, place, { keys: true });
+    // (tapped: the place is taken and the keyboard goes away; Enter keeps on typing: see keydown)
+    row.onclick = () => choose(end, place);
     f.rows.push(place);
     f.list.appendChild(row);
     return row;
@@ -251,8 +252,6 @@
     const f = fields[end];
     f.input.addEventListener('focus', () => {
       const place = ends[end];
-      // the chosen place stays written, selected: typing replaces it, Enter keeps it
-      if (place && f.input.value === place.name) setTimeout(() => { if (document.activeElement === f.input) f.input.select(); }, 0);
       showField(end);
       if (f.input.value.trim() === '') suggest(end);
     });
@@ -298,9 +297,8 @@
     f.clear.addEventListener('click', () => {
       f.input.value = '';
       if (ends[end]) { ends[end] = null; changed(); }
+      closeLists();
       showField(end);
-      f.input.focus();
-      suggest(end);
     });
   });
   // a tap anywhere else closes the lists
@@ -480,11 +478,44 @@
     return `${END_NAMES[end]} is outside Baden-Württemberg: journeys start and end in Baden-Württemberg.`;
   }
 
-  async function fetchPage(page) {
+  // While connections are on their way, the app's own server is asked every
+  // few seconds whether it is there (a tiny request). No answer: the wait is
+  // stopped and the page says so, instead of loading for ever. An answer: the
+  // wait is the timetable service's (the card says it is slow after a while).
+  const PING_EVERY_MS = 8000;
+  const PING_PATIENCE_MS = 5000;
+  // the longest a search may take at all (the server gives the planner up to 40 s, and one more try)
+  const SEARCH_PATIENCE_MS = 95000;
+  const UNREACHABLE = 'The BW Departures server cannot be reached (no internet connection, or the server is down).';
+
+  function timedFetch(url, ms, outer) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    if (outer) outer.addEventListener('abort', () => controller.abort());
+    return fetch(url, { signal: controller.signal, cache: 'no-store' }).finally(() => clearTimeout(timer));
+  }
+
+  function watchServer(search, controller) {
+    let gone = false;
+    const timer = setInterval(async () => {
+      if (search !== searchId || controller.signal.aborted) { clearInterval(timer); return; }
+      try {
+        await timedFetch(`${API}/`, PING_PATIENCE_MS);
+      } catch {
+        if (search !== searchId) return;
+        gone = true;
+        clearInterval(timer);
+        controller.abort();
+      }
+    }, PING_EVERY_MS);
+    return { stop: () => clearInterval(timer), gone: () => gone };
+  }
+
+  async function fetchPage(page, controller = null) {
     const url = journeysUrl(page);
     let res;
     try {
-      res = await fetch(url);
+      res = controller ? await timedFetch(url, SEARCH_PATIENCE_MS, controller.signal) : await fetch(url);
     } catch {
       return { ok: false, message: 'Could not load connections (no connection?).', retry: true };
     }
@@ -561,8 +592,12 @@
       document.dispatchEvent(new CustomEvent('route-searched'));
       document.dispatchEvent(new CustomEvent('route-changed'));
     }
-    const answers = await Promise.all(pages.map(fetchPage));
+    const controller = new AbortController();
+    const watch = watchServer(search, controller);
+    const answers = await Promise.all(pages.map(page => fetchPage(page, controller)));
+    watch.stop();
     if (search !== searchId || request !== loadCounter) return;
+    if (watch.gone()) answers[0] = { ok: false, message: UNREACHABLE, retry: true };
     const base = answers[0];
     if (!base.ok) {
       if (refreshing && state === 'ready') { updateProblem = base.message; renderHead(); return; }
@@ -589,6 +624,9 @@
     state = 'ready';
     updatedAt = Date.now();
     updateProblem = '';
+    // a new list (not a refresh): its first connection is opened and drawn, like Google Maps
+    const first = !refreshing && !openId ? (journeys.find(j => !departed(j)) || journeys[0]) : null;
+    if (first) { toggle(first.id, { auto: true }); return; }
     const held = holdCards();
     renderAll();
     held();
@@ -704,20 +742,29 @@
     const shown = journeys.find(j => j.id === openId) || (state === 'ready' ? journeys.find(j => !departed(j)) : null);
     const peek = el('div', 'route-peek');
     if (shown) {
-      peek.appendChild(timesOf(shown));
-      peek.appendChild(chainOf(shown, true));
+      const what = el('div', 'route-peek-what');
+      what.appendChild(timesOf(shown));
+      what.appendChild(chainOf(shown, true));
+      peek.appendChild(what);
       if (openId) {
-        const close = el('button', 'peek-close', '✕');
-        close.type = 'button';
-        close.setAttribute('aria-label', 'Close this connection');
-        close.onclick = (e) => { e.stopPropagation(); toggle(null); };
-        peek.appendChild(close);
+        peek.classList.add('open');
+        peek.appendChild(closeButton());
       }
     } else {
       peek.appendChild(el('span', 'route-peek-text', state === 'ready' ? (empty ? 'No connections' : 'No connections left') : statusText()));
     }
     head.appendChild(peek);
     head.appendChild(el('div', state === 'error' || state === 'problem' ? 'route-status late' : 'route-status', statusText()));
+  }
+
+  // "✕ Close": the opened connection is given up (its route leaves the map)
+  function closeButton() {
+    const close = el('button', 'route-close', '✕ Close');
+    close.type = 'button';
+    close.title = 'Close this connection';
+    close.setAttribute('aria-label', 'Close this connection');
+    close.onclick = (e) => { e.stopPropagation(); toggle(null); };
+    return close;
   }
 
   function notice(text, className = 'notice') {
@@ -857,7 +904,7 @@
   }
 
   // opens a connection (null: closes it); the map draws its route
-  function toggle(id) {
+  function toggle(id, { auto = false } = {}) {
     openId = id;
     quiet = false;
     openStops.clear();
@@ -867,6 +914,7 @@
     if (!id) return;
     // the map shows the route: the sheet at half height (the user's rule; the details are a drag up)
     if (window.sheet && window.sheet.state()) document.dispatchEvent(new CustomEvent('sheet-request', { detail: { state: 'half' } }));
+    if (auto) { panelBox.scrollTop = 0; return; }   // (opened by itself: the list from its top)
     // on a phone with the sheet at half height: the opened connection moves up
     const opened = routeBoard.querySelector('.conn.open');
     if (opened && window.sheet && window.sheet.state()) {
@@ -901,10 +949,13 @@
   function details(j) {
     const wrap = el('div', 'conn-details');
     // on a phone, when the sheet covers the map (style.css shows it only then)
+    const actions = el('div', 'conn-actions');
     const toMap = el('button', 'stops-map', 'Show on map');
     toMap.type = 'button';
     toMap.onclick = (e) => { e.stopPropagation(); document.dispatchEvent(new CustomEvent('sheet-request', { detail: { state: 'half' } })); };
-    wrap.appendChild(toMap);
+    actions.appendChild(toMap);
+    actions.appendChild(closeButton());
+    wrap.appendChild(actions);
 
     const steps = [];
     let rideCount = 0;

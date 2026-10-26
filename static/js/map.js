@@ -367,6 +367,18 @@
   let routeShown = '';   // what the map was last fitted to: it moves only when that changes
   let routeStops = new Set();   // the stations of the connection drawn (its dots stay bright)
 
+  // The map jumps without its animation, but on iPhones its picture could still
+  // stay empty until it was dragged (seen after a route was drawn or closed).
+  // Once the sheet has moved (its slide takes 0.28 s), the map measures itself
+  // again and asks for the pieces of what it shows.
+  function settleTiles() {
+    setTimeout(() => {
+      map.invalidateSize({ pan: false });
+      // no pieces at all (not even loading ones): ask again (a slow connection keeps its loading ones)
+      if (!map.getPane('tilePane').querySelector('.leaflet-tile')) tiles.redraw();
+    }, 400);
+  }
+
   function askRoute(at, place) {
     const box = el('div', 'route-pop');
     box.appendChild(el('div', 'route-pop-name', place.name));
@@ -428,24 +440,25 @@
           .addTo(routeLayer);
       });
     }
-    [[from, 'from'], [to, 'to']].forEach(([place, which]) => {
-      const mark = endMark(place, which);
-      if (mark) { mark.addTo(routeLayer); points.push([place.lat, place.lon]); }
-    });
-    // the map moves only when there is something new to see
-    const key = journey ? `j:${journey.id}` : `e:${[from, to].map(p => (p && p.lat !== null ? `${p.lat},${p.lon}` : '')).join('|')}`;
-    if (key === routeShown || !points.length) return;
-    routeShown = key;
-    if (!journey && points.length === 1) {
-      if (!inSight(L.latLng(points[0]))) showAt(L.latLng(points[0]), Math.max(map.getZoom(), STOP_ZOOM - 2));
-      return;
+    // the start and the destination are marked only with a connection drawn (the user's rule)
+    if (journey) {
+      [[from, 'from'], [to, 'to']].forEach(([place, which]) => {
+        const mark = endMark(place, which);
+        if (mark) { mark.addTo(routeLayer); points.push([place.lat, place.lon]); }
+      });
     }
+    // the map moves only when there is a new connection to see
+    const key = journey ? `j:${journey.id}` : '';
+    if (key === routeShown) return;
+    routeShown = key;
+    if (!journey || !points.length) return;
     // (the free part of the map can be small on a phone: then the margins shrink, or the route is fitted to the whole map)
     let { top, bottom } = covered();
     const free = map.getSize().y - top - bottom;
     const margin = free > 160 ? 30 : 8;
     if (free < 80) top = bottom = 0;
     map.fitBounds(L.latLngBounds(points), { paddingTopLeft: [margin, top + margin], paddingBottomRight: [margin, bottom + margin], maxZoom: 16, animate: false });
+    settleTiles();
   }
 
   document.addEventListener('route-drawn', (e) => drawRoute(e.detail));
