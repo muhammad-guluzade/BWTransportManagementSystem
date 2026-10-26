@@ -330,6 +330,8 @@ async function searchStops(q) {
 // 'history' = the Back button), so the map knows whether it should move there
 // `options` (a favourite platform): {tab, platform: the favourite}
 function selectStop(id, name, source = 'search', options = {}) {
+  // a stop opened from Route mode (a favourite, a link): the departures again
+  if (window.route && window.route.active()) window.route.setMode('departures');
   input.value = name;
   pickedName = name;
   input.blur();      // on a phone: the keyboard goes away

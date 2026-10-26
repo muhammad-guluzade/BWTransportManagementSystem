@@ -451,6 +451,7 @@ body.route-mode #panel-close { display: none !important; }
 .route-notice summary { cursor: pointer; }
 .route-notice.high summary { font-weight: 600; }
 .route-notice p { margin: 6px 0 2px; white-space: pre-line; }
+.route-notice .route-notice-source { color: var(--muted); font-size: 0.78rem; }
 /* the map's question in Route mode: from here or to here? */
 /* closing an opened connection: a labelled button, in its bar and in the connection itself */
 .route-close { flex-shrink: 0; padding: 5px 12px; border: 1px solid var(--line); border-radius: 15px; background: var(--card); color: var(--text);

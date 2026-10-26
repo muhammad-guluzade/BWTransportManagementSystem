@@ -384,11 +384,11 @@ class PlacesSearchTest(ApiTestCase):
         super().setUp()
         client.find_stops = lambda query: {"stopFinder": {"points": [
             SEARCH["stopFinder"]["points"][0],
-            {"anyType": "poi", "name": "Stuttgart, Mercedes-Benz Museum", "object": "Mercedes-Benz Museum",
+            {"anyType": "poi", "name": "Stuttgart, Mercedes-Benz Museum", "object": "Mercedes-Benz Museum", "quality": "900",
              "ref": {"omc": "8111000", "coords": "9.233666,48.788546"}},
-            {"anyType": "singlehouse", "name": "Stuttgart, Königstraße 9/1", "ref": {"omc": "8111000", "coords": "9.178923,48.778839"}},
-            {"anyType": "singlehouse", "name": "Stuttgart, Königstraße 9/1", "ref": {"omc": "8111000", "coords": "9.178923,48.778839"}},
-            {"anyType": "street", "name": "Ulm, Hauptstraße", "ref": {"omc": "8421000", "coords": "9.98,48.40"}},
+            {"anyType": "singlehouse", "name": "Stuttgart, Königstraße 9/1", "quality": "900", "ref": {"omc": "8111000", "coords": "9.178923,48.778839"}},
+            {"anyType": "singlehouse", "name": "Stuttgart, Königstraße 9/1", "quality": "900", "ref": {"omc": "8111000", "coords": "9.178923,48.778839"}},
+            {"anyType": "street", "name": "Ulm, Hauptstraße", "quality": "900", "ref": {"omc": "8421000", "coords": "9.98,48.40"}},
             {"anyType": "street", "name": "Neu-Ulm, Hauptstraße", "ref": {"omc": "9775135", "coords": "10.01,48.39"}},
             {"anyType": "street", "name": "Bahnhofstraße"},                                   # no position
             {"anyType": "locality", "name": "Stuttgart", "ref": {"omc": "8111000", "coords": "9.18,48.78"}},
@@ -397,21 +397,64 @@ class PlacesSearchTest(ApiTestCase):
     def test_places(self):
         body = self.http.get("/api/v1/stops/search?q=Stuttgart&places=1").get_json()
         self.assertEqual([s["id"] for s in body["stops"]], [STOP])
-        self.assertEqual(body["places"], [
-            {"kind": "place", "name": "Stuttgart, Mercedes-Benz Museum", "lat": 48.788546, "lon": 9.233666},
-            {"kind": "address", "name": "Stuttgart, Königstraße 9/1", "lat": 48.778839, "lon": 9.178923},
-            {"kind": "street", "name": "Ulm, Hauptstraße", "lat": 48.40, "lon": 9.98},
-        ])
+        # each place once, none outside the state or without a position; no towns
+        self.assertEqual(sorted(p["name"] for p in body["places"]),
+                         ["Stuttgart, Königstraße 9/1", "Stuttgart, Mercedes-Benz Museum", "Ulm, Hauptstraße"])
+        self.assertEqual({p["kind"] for p in body["places"]}, {"place", "address", "street"})
+        self.assertEqual(set(body["places"][0]), {"kind", "name", "lat", "lon"})
+        # all of them together in `results`, each saying what it is
+        self.assertEqual(sorted(r["name"] for r in body["results"] if r["type"] == "place"), sorted(p["name"] for p in body["places"]))
+        self.assertEqual([r["id"] for r in body["results"] if r["type"] == "stop"], [STOP])
 
     def test_only_when_asked(self):
         self.assertNotIn("places", self.http.get("/api/v1/stops/search?q=Stuttgart").get_json())
-        self.assertEqual(self.http.get("/api/v1/stops/search?q=a&places=1").get_json(), {"stops": [], "places": []})
+        self.assertEqual(self.http.get("/api/v1/stops/search?q=a&places=1").get_json(), {"stops": [], "places": [], "results": []})
 
     def test_the_service_down_gives_no_places(self):
         def down(query):
             raise client.EfaError("down")
         client.find_stops = down
-        self.assertEqual(stops.place_matches("Stuttgart"), [])
+        res = self.http.get("/api/v1/stops/search?q=Stuttgart&places=1")
+        self.assertIn(res.status_code, (200, 502))   # (the stops alone, or nothing at all without a database)
+        if res.status_code == 200:
+            self.assertEqual(res.get_json()["places"], [])
+
+    def test_ranked_by_words_and_nearness(self):
+        """Streets of one name in many towns: the one near the map first;
+        a better fitting place before a poorer one."""
+        client.find_stops = lambda query: {"stopFinder": {"points": [
+            {"anyType": "street", "name": "Tauberbischofsheim, Eichstraße", "quality": "900", "ref": {"omc": "8128115", "coords": "9.66,49.62"}},
+            {"anyType": "street", "name": "Stuttgart, Eichstraße", "quality": "800", "ref": {"omc": "8111000", "coords": "9.17,48.76"}},
+            {"anyType": "poi", "name": "Stuttgart, Spielplatz Eichstraße", "quality": "500", "ref": {"omc": "8111000", "coords": "9.17,48.76"}},
+        ]}}
+        near_stuttgart = self.http.get("/api/v1/stops/search?q=Eichstraße&places=1&near=48.77,9.18&radius=3").get_json()
+        self.assertEqual([p["name"] for p in near_stuttgart["places"]][:2], ["Stuttgart, Eichstraße", "Tauberbischofsheim, Eichstraße"])
+        near_tauber = self.http.get("/api/v1/stops/search?q=Eichstraße&places=1&near=49.62,9.66&radius=3").get_json()
+        self.assertEqual(near_tauber["places"][0]["name"], "Tauberbischofsheim, Eichstraße")
+
+    def test_house_number_looked_up_for_the_best_streets(self):
+        asked = []
+
+        def find(query):
+            asked.append(query)
+            if query == "Eichstraße 9 Stuttgart":
+                return {"stopFinder": {"points": [
+                    {"anyType": "singlehouse", "name": "Stuttgart, Eichstraße 9", "quality": "1000", "ref": {"omc": "8111000", "coords": "9.171,48.761"}},
+                    {"anyType": "singlehouse", "name": "Stuttgart, Teichstraße 9", "quality": "860", "ref": {"omc": "8111000", "coords": "9.2,48.7"}}]}}
+            return {"stopFinder": {"points": [
+                {"anyType": "street", "name": "Stuttgart, Eichstraße", "quality": "800", "ref": {"omc": "8111000", "coords": "9.17,48.76"}},
+                {"anyType": "street", "name": "Ulm, Eichstraße", "quality": "800", "ref": {"omc": "8421000", "coords": "9.98,48.40"}}]}}
+        client.find_stops = find
+        body = self.http.get("/api/v1/stops/search?q=Eichstraße 9&places=1&near=48.77,9.18&radius=3").get_json()
+        self.assertEqual(body["places"][0], {"kind": "address", "name": "Stuttgart, Eichstraße 9", "lat": 48.761, "lon": 9.171})
+        self.assertEqual(body["results"][0]["name"], "Stuttgart, Eichstraße 9")
+        self.assertIn("Eichstraße 9 Stuttgart", asked)
+        self.assertIn("Eichstraße 9 Ulm", asked)        # the two best streets of the name, no more
+        self.assertNotIn("Stuttgart, Teichstraße 9", [p["name"] for p in body["places"]])
+        # without a number nothing more is asked
+        asked.clear()
+        self.http.get("/api/v1/stops/search?q=Eichstraße&places=1")
+        self.assertEqual(len(set(asked)), 1)
 
     def test_state_by_municipality_key(self):
         self.assertTrue(parse.municipality_in_bw("8421000"))

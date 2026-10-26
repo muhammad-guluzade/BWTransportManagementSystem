@@ -37,6 +37,8 @@
   const SLOW_MS = 6000;
   let slow = false;
   const PLACE_KINDS = { place: 'Place', address: 'Address', street: 'Street' };
+  // a notice's text in the Translate link (longer addresses are cut by some browsers)
+  const TRANSLATE_MAX_CHARS = 1800;
   const OTHER = { from: 'to', to: 'from' };
   const END_NAMES = { from: 'The start', to: 'The destination' };
 
@@ -201,22 +203,26 @@
     try {
       res = await fetch(`${API}/stops/search?q=${encodeURIComponent(q)}&places=1${mapPlace()}`);
     } catch {
-      if (request === f.counter) showFound(end, [], [], q.trim(), 'Could not search (no connection?).');
+      if (request === f.counter) showFound(end, [], q.trim(), 'Could not search (no connection?).');
       return;
     }
     if (window.noticeVersion) noticeVersion(res);
     if (request !== f.counter) return;
     if (!res.ok) {
       const message = await errorMessage(res, 'Could not search.');
-      if (request === f.counter) showFound(end, [], [], q.trim(), message);
+      if (request === f.counter) showFound(end, [], q.trim(), message);
       return;
     }
     const data = await res.json();
     if (request !== f.counter) return;
-    showFound(end, data.stops, data.places || [], q.trim());
+    // stops, streets, addresses and sights together, as the server ranked them
+    const results = data.results || [...data.stops.map(s => ({ type: 'stop', ...s })), ...(data.places || []).map(p => ({ type: 'place', ...p }))];
+    showFound(end, results, q.trim());
   }
 
-  function showFound(end, stops, places, typed, message = '') {
+  function showFound(end, results, typed, message = '') {
+    const stops = results.filter(r => r.type === 'stop');
+    const places = results.filter(r => r.type === 'place');
     const f = fields[end];
     const counter = f.counter;
     closeLists();
@@ -227,10 +233,13 @@
     else if (stops.length && stops.every(s => s.partial) && !places.length) {
       f.list.appendChild(el('div', 'no-result', `No stop matches every word of "${typed}". Stops that match part of it:`));
     }
-    stops.forEach(stop => listRow(end, { kind: 'stop', id: stop.id, name: stop.name, lat: stop.lat, lon: stop.lon },
-      stop.name, stop.types.map(t => t.name).join(', ')));
-    places.forEach(place => listRow(end, { kind: 'place', id: null, name: place.name, lat: place.lat, lon: place.lon },
-      place.name, PLACE_KINDS[place.kind] || '', 'route-place'));
+    results.forEach(r => {
+      if (r.type === 'stop') {
+        listRow(end, { kind: 'stop', id: r.id, name: r.name, lat: r.lat, lon: r.lon }, r.name, (r.types || []).map(t => t.name).join(', '));
+      } else {
+        listRow(end, { kind: 'place', id: null, name: r.name, lat: r.lat, lon: r.lon }, r.name, PLACE_KINDS[r.kind] || '', 'route-place');
+      }
+    });
     f.input.setAttribute('aria-expanded', String(f.rows.length > 0));
     if (f.waiting && f.waiting === typed) {
       f.waiting = '';
@@ -252,6 +261,12 @@
     const f = fields[end];
     f.input.addEventListener('focus', () => {
       const place = ends[end];
+      // as in the departures search: room to type, the chosen place stays as a grey hint
+      // (and comes back if nothing is typed)
+      if (place && (f.input.value === place.name || place.locating)) {
+        f.input.placeholder = place.locating ? 'My location' : place.name;
+        f.input.value = '';
+      }
       showField(end);
       if (f.input.value.trim() === '') suggest(end);
     });
@@ -604,6 +619,7 @@
       state = 'error';
       problem = { message: base.message, retry: base.retry };
       renderAll();
+      document.dispatchEvent(new CustomEvent('route-changed'));   // (the Back step of the search goes)
       return;
     }
     const data = base.data;
@@ -1062,6 +1078,15 @@
       box.open = openNotices.has(noticeKey);
       box.appendChild(el('summary', '', `⚠ ${title}`));
       notices.forEach(n => { if (n.text) box.appendChild(el('p', '', n.text)); });
+      // the operators write in German: Google Translate opens with the text in a new tab
+      const original = [title, ...notices.map(n => n.text).filter(Boolean)].join('\n\n').slice(0, TRANSLATE_MAX_CHARS);
+      const source = el('p', 'route-notice-source', 'Operator notice (German) · ');
+      const translate = el('a', '', 'Translate');
+      translate.href = `https://translate.google.com/?sl=de&tl=en&op=translate&text=${encodeURIComponent(original)}`;
+      translate.target = '_blank';
+      translate.rel = 'noopener noreferrer';
+      source.appendChild(translate);
+      box.appendChild(source);
       box.addEventListener('toggle', () => { if (box.open) openNotices.add(noticeKey); else openNotices.delete(noticeKey); });
       what.appendChild(box);
     });
@@ -1098,6 +1123,8 @@
     hasContent: () => mode === 'route' && state !== 'idle',
     openId: () => openId,
     close: () => toggle(null),
+    // Back while connections are on their way: the search is given up
+    cancel: () => changed(),
     // (the map's "From here / To here": the form opens, so the choice can be seen)
     choose: (end, place) => { folded = false; choose(end, place); fold(); },
     search,

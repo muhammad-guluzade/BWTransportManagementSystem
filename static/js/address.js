@@ -35,7 +35,9 @@
     let n = openDeparture ? 1 : 0;
     if (window.sheet && window.sheet.stateIn('departures') === 'full') n += 1;
     if (routeMode()) {
-      n += 1 + (window.route.openId() ? 1 : 0);
+      // (a search on its way counts as its connection: the first one opens by itself
+      // when the answer comes, too late for the browser to let a page add a step then)
+      n += 1 + (window.route.openId() || window.route.state() === 'loading' ? 1 : 0);
       if (window.sheet && window.sheet.state() === 'full') n += 1;
     }
     return n;
@@ -44,6 +46,7 @@
   function closeOne() {
     if (routeMode()) {
       if (window.route.openId()) window.route.close();
+      else if (window.route.state() === 'loading') window.route.cancel();
       else if (window.sheet && window.sheet.state() === 'full') window.sheet.set(window.sheet.mode() === 'screens' ? 'peek' : 'half');
       else window.route.setMode('departures');
     } else if (openDeparture) closeOpen();

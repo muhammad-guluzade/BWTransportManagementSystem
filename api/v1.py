@@ -134,12 +134,11 @@ def stops_in_area():
 
 @bp.route("/stops/search")
 def search_stops():
-    body = {"stops": stops.search(request.args.get("q", ""), request.args.get("near", ""),
-                                  request.args.get("radius", ""), request.args.get("limit", ""))}
+    args = (request.args.get("q", ""), request.args.get("near", ""), request.args.get("radius", ""), request.args.get("limit", ""))
     if flag("places"):
-        # the navigator: sights, addresses and streets too, for a start or a destination
-        body["places"] = stops.place_matches(request.args.get("q", ""))
-    return jsonify(body)
+        # the navigator: sights, addresses and streets too, ranked with the stops
+        return jsonify(stops.route_search(*args))
+    return jsonify({"stops": stops.search(*args)})
 
 
 @bp.route("/stops/<stop_id>/departures")

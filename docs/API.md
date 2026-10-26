@@ -100,7 +100,7 @@ again with every key typed.
 | `near` | optional | Where the user's map is (its centre), as `lat,lon`. Stops there come first. |
 | `radius` | optional | How far that map shows, in kilometres from its centre. Default 10. With a map of the whole state (a large radius) no place is preferred. |
 | `limit` | optional | How many stops to return at most. Default 10, maximum 25. |
-| `places` | optional | `1`: also sights, addresses and streets (for a journey's start or destination), as `places`. Default `0`. |
+| `places` | optional | `1`: also sights, addresses and streets (for a journey's start or destination), as `places`, and everything together as `results`. Default `0`. |
 
 What the search copes with:
 
@@ -166,7 +166,8 @@ Example: `/api/v1/stops/search?q=Stuttgart Hauptbahnhof`
 | `lat`, `lon` | Position of the stop. |
 | `types` | Transport types listed for the stop (by the timetable service, or by the stop database for a stop only it found). A hint only: it can include a type that has no departures. The departures endpoint returns the verified list as `tabs`. |
 | `partial` | `true` if the stop fits only some of the words typed (see "Words that fit no stop"). Such stops only come when the stop database has no stop that fits all the words; the timetable service's own matches are never partial. |
-| `places` | Only with `places=1`: up to 5 places of Baden-Württemberg the timetable service's search finds, as it ranks them: `kind` (`"place"`: a sight or building, `"address"`, `"street"`), `name` (with the town, `"Stuttgart, Mercedes-Benz Museum"`), `lat`, `lon`. Pass the position to the journeys endpoint as a point. Empty when the timetable service doesn't answer. |
+| `places` | Only with `places=1`: up to 6 places of Baden-Württemberg the timetable service's search finds, best first: `kind` (`"place"`: a sight or building, `"address"`, `"street"`), `name` (with the town, `"Stuttgart, Mercedes-Benz Museum"`), `lat`, `lon`. Ranked like the stops: how well the words fit and, with `near`, how close each one is (`Eichstraße` on a map of Stuttgart: Stuttgart's first). A house number typed without a town (`Eichstraße 9`) is looked up in the towns of the best streets of that name. Pass the position to the journeys endpoint as a point. Empty when the timetable service doesn't answer. |
+| `results` | Only with `places=1`: the stops and the places together, in one order (a stop with `"type": "stop"` and the fields above, a place with `"type": "place"` and its fields), at most `limit`: what a search box shows. |
 
 ### `GET /api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}&platforms={0|1}`
 

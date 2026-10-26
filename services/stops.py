@@ -1,5 +1,6 @@
 """Stop search: find stops in Baden-Württemberg by name."""
 import logging
+import re
 import sqlite3
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
@@ -87,35 +88,108 @@ def efa_matches(query: str) -> list:
     return sorted(stops, key=lambda s: (-s["quality"], -len(s["classes"])))
 
 
-PLACES_LIMIT = 5
+# ---------- the navigator's search: places too, ranked with the stops ----------
+PLACES_LIMIT = 6
+# A place is ranked like a stop of this importance (Mannheim Hbf is about 48):
+# a street or sight that fits the words well comes before a stop that fits
+# them less well, and the nearer one first
+PLACE_IMPORTANCE = 6.0
+# a house number typed ("Eichstraße 9"): the best streets of that name are asked for it
+HOUSE_NUMBER = re.compile(r"(?<![\w-])(\d{1,4}[a-zA-Z]?)(?![\w-])")
+STREETS_FOR_A_NUMBER = 2
+# the navigator waits a little longer for the timetable service, which knows the places
+PLACES_PATIENCE_SECONDS = 3.0
 
 
-def place_matches(query: str, limit: int = PLACES_LIMIT) -> list:
-    """Sights, addresses and streets the timetable service's search finds
-    for `query` in Baden-Württemberg, as [{kind, name, lat, lon}] (for the
-    navigator; the answer of the stop search is kept a while, so asking
-    again right after it costs nothing). [] when the service can't be asked."""
+def place_text(quality: float) -> float:
+    """How well a place fits the words, on the stops' scale (0-1), from the
+    timetable service's own match score (0-1000)."""
+    return 0.95 * max(0.0, min(quality, 1000.0)) / 1000
+
+
+def ranked_places(points: list, place: tuple | None, radius_km: float) -> list:
+    """The sights, addresses and streets among the timetable service's
+    matches, in Baden-Württemberg, each with a `score` (best first; one per
+    name)."""
     from services import journeys   # (it imports this module's neighbours)
-    query = " ".join(query.split())
-    if len(query) < 2:
-        return []
-    try:
-        points = parse.extract_points(client.find_stops(query))
-    except client.EfaError:
-        return []
-    places, names = [], set()
+    best = {}
     for point in points:
         try:
             found = parse.parse_place(point)
         except Exception:  # noqa: BLE001 -- skip just this match
             continue
-        if not found or found["name"] in names or not journeys.in_baden_wuerttemberg(found["lat"], found["lon"]):
+        if not found:
             continue
-        names.add(found["name"])
-        places.append(found)
-        if len(places) == limit:
-            break
-    return places
+        # outside the state by its town's key: parse_place left it out; no key: a stop of the state must be near
+        if parse.municipality_in_bw((point.get("ref") or {}).get("omc")) is None and not journeys.in_baden_wuerttemberg(found["lat"], found["lon"]):
+            continue
+        try:
+            quality = float(point.get("quality") or 0)
+        except (TypeError, ValueError):
+            quality = 0.0
+        found["score"] = stop_index.final_score(place_text(quality), PLACE_IMPORTANCE, found["lat"], found["lon"], place, radius_km)
+        if found["name"] not in best or best[found["name"]]["score"] < found["score"]:
+            best[found["name"]] = found
+    return sorted(best.values(), key=lambda p: (-p["score"], p["name"]))
+
+
+def house_numbers(query: str, places: list) -> list:
+    """A house number typed without a town ("Eichstraße 9"): the timetable
+    service finds the house only with the town, so the best streets of that
+    name are asked for it ("Eichstraße 9 Stuttgart"). Each house found is
+    ranked just above its street."""
+    number = HOUSE_NUMBER.search(query)
+    if not number:
+        return []
+    streets = [p for p in places if p["kind"] == "street" and ", " in p["name"]][:STREETS_FOR_A_NUMBER]
+
+    def look(street):
+        town, road = street["name"].split(", ", 1)
+        wanted = stop_index.fold(f"{road} {number.group(1)}")
+        try:
+            points = parse.extract_points(client.find_stops(f"{road} {number.group(1)} {town}"))
+        except client.EfaError:
+            return None
+        for point in points:
+            try:
+                found = parse.parse_place(point)
+            except Exception:  # noqa: BLE001
+                continue
+            if found and found["kind"] == "address" and stop_index.fold(found["name"]).endswith(wanted):
+                found["score"] = round(street["score"] * 1.03, 4)
+                return found
+        return None
+
+    return [house for house in _pool.map(look, streets) if house]
+
+
+def route_search(query: str, near: str = "", radius: str = "", limit: str = "") -> dict:
+    """The navigator's search (`places=1`): {stops, places, results}.
+    `stops` as search() gives them; `places` the sights, addresses and
+    streets, best first; `results` both together in one order, by how well
+    the words fit and (with `near`) how close each one is: what a map app
+    shows."""
+    finished = query[-1:].isspace()
+    query = " ".join(query.split())
+    place, radius_km = search_place(near, radius)
+    count = search_count(limit)
+    if len(query) < 2:
+        return {"stops": [], "places": [], "results": []}
+    ranked = ranked_stops(query, place, radius_km, count, finished, PLACES_PATIENCE_SECONDS)
+    try:
+        points = parse.extract_points(client.find_stops(query))   # (kept by the stop search a moment ago)
+    except client.EfaError:
+        points = []
+    places = ranked_places(points, place, radius_km)
+    places = sorted(house_numbers(query, places) + places, key=lambda p: (-p["score"], p["name"]))[:PLACES_LIMIT]
+    stops = public_stops(ranked)
+    mixed = [(c["score"], {"type": "stop", **s}) for c, s in zip(ranked, stops)]
+    mixed += [(p["score"], {"type": "place", **{k: v for k, v in p.items() if k != "score"}}) for p in places]
+    mixed.sort(key=lambda m: -m[0])
+    if mixed:
+        mixed = [m for m in mixed if m[0] >= stop_index.WORTH_SHOWING * mixed[0][0]]
+    return {"stops": stops, "places": [{k: v for k, v in p.items() if k != "score"} for p in places],
+            "results": [m[1] for m in mixed[:count]]}
 
 
 def own_matches(query: str, place: tuple | None, radius_km: float, limit: int) -> list | None:
@@ -167,6 +241,14 @@ def search_place(near: str, radius: str) -> tuple:
     return place, radius_km
 
 
+def search_count(limit: str) -> int:
+    try:
+        count = int(limit) if limit.strip() else SEARCH_DEFAULT_LIMIT
+    except ValueError:
+        raise InvalidArea("limit must be a whole number") from None
+    return max(1, min(count, SEARCH_MAX_LIMIT))
+
+
 def search(query: str, near: str = "", radius: str = "", limit: str = "") -> list:
     """Stops matching `query`, best match first, as
     [{id, name, lat, lon, types: [{id, name}], partial}].
@@ -186,20 +268,22 @@ def search(query: str, near: str = "", radius: str = "", limit: str = "") -> lis
     finished = query[-1:].isspace()
     query = " ".join(query.split())
     place, radius_km = search_place(near, radius)
-    try:
-        count = int(limit) if limit.strip() else SEARCH_DEFAULT_LIMIT
-    except ValueError:
-        raise InvalidArea("limit must be a whole number") from None
-    count = max(1, min(count, SEARCH_MAX_LIMIT))
+    count = search_count(limit)
     if len(query) < 2:
         return []
+    return public_stops(ranked_stops(query, place, radius_km, count, finished))
 
+
+def ranked_stops(query: str, place: tuple | None, radius_km: float, count: int, finished: bool = False,
+                 patience: float | None = None) -> list:
+    """The stops for `query`, best first, each with its `score` (see search())."""
+    patience = EFA_PATIENCE_SECONDS if patience is None else patience
     asked = _pool.submit(efa_matches, query)
     own = own_matches(query + " " if finished else query, place, radius_km, 3 * count)
     try:
         # With matches of our own there is no reason to make someone who is
         # typing wait for a slow answer; it is remembered for the next key.
-        found = asked.result(timeout=EFA_PATIENCE_SECONDS if own else None)
+        found = asked.result(timeout=patience if own else None)
     except TimeoutError:
         found = []
     except client.EfaError:
@@ -232,8 +316,11 @@ def search(query: str, near: str = "", radius: str = "", limit: str = "") -> lis
     ranked = sorted(candidates.values(), key=lambda c: (-c["score"], c["name"], c["id"]))
     if ranked:
         ranked = [c for c in ranked if c["score"] >= stop_index.WORTH_SHOWING * ranked[0]["score"]]
-    ranked = ranked[:count]
+    return ranked[:count]
 
+
+def public_stops(ranked: list) -> list:
+    """The ranked stops as the API gives them, names made unmistakable."""
     # a train station and the bus stop next to it can carry the same name
     # ("Kehl, Bahnhof" twice): say what stops at each; two villages can have
     # the same stop name ("Rathaus"): say which district
