@@ -432,6 +432,20 @@ class PlacesSearchTest(ApiTestCase):
         near_tauber = self.http.get("/api/v1/stops/search?q=Eichstraße&places=1&near=49.62,9.66&radius=3").get_json()
         self.assertEqual(near_tauber["places"][0]["name"], "Tauberbischofsheim, Eichstraße")
 
+    def test_the_address_typed_comes_before_stops_of_that_street(self):
+        """'Aldinger Straße 212': the house, not a stop on some Aldinger Straße;
+        'Eichstraße 9' is not 'Bleichstraße 9'; 'Str.' and 'Straße' alike."""
+        client.find_stops = lambda query: {"stopFinder": {"points": [
+            {"anyType": "stop", "name": "Ludwigsburg, Aldinger Straße", "quality": "950", "modes": "5",
+             "ref": {"gid": "de:08118:5522", "coords": "9.208,48.8845"}},
+            {"anyType": "singlehouse", "name": "Stuttgart, Aldinger Straße 212", "quality": "900", "ref": {"omc": "8111000", "coords": "9.2438,48.8472"}},
+            {"anyType": "singlehouse", "name": "Tauberbischofsheim, Bleichstraße 212", "quality": "900", "ref": {"omc": "8128115", "coords": "9.66,49.62"}},
+        ]}}
+        for typed in ("Aldinger Straße 212", "Aldinger Str. 212", "aldingerstrasse 212"):
+            body = self.http.get(f"/api/v1/stops/search?q={typed}&places=1&near=48.86,9.21&radius=5").get_json()
+            self.assertEqual(body["results"][0]["name"], "Stuttgart, Aldinger Straße 212", typed)
+        self.assertEqual(stops.same_spelling("Aldinger Str. 212"), stops.same_spelling("Aldingerstraße 212"))
+
     def test_house_number_looked_up_for_the_best_streets(self):
         asked = []
 
@@ -451,6 +465,10 @@ class PlacesSearchTest(ApiTestCase):
         self.assertIn("Eichstraße 9 Stuttgart", asked)
         self.assertIn("Eichstraße 9 Ulm", asked)        # the two best streets of the name, no more
         self.assertNotIn("Stuttgart, Teichstraße 9", [p["name"] for p in body["places"]])
+        # with no map to go by, more streets are asked (their order: the service's)
+        asked.clear()
+        self.http.get("/api/v1/stops/search?q=Eichstraße 9&places=1")
+        self.assertIn("Eichstraße 9 Stuttgart", asked)
         # without a number nothing more is asked
         asked.clear()
         self.http.get("/api/v1/stops/search?q=Eichstraße&places=1")

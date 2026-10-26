@@ -93,10 +93,13 @@ PLACES_LIMIT = 6
 # A place is ranked like a stop of this importance (Mannheim Hbf is about 48):
 # a street or sight that fits the words well comes before a stop that fits
 # them less well, and the nearer one first
-PLACE_IMPORTANCE = 6.0
+PLACE_IMPORTANCE = 2.0
 # a house number typed ("Eichstraße 9"): the best streets of that name are asked for it
 HOUSE_NUMBER = re.compile(r"(?<![\w-])(\d{1,4}[a-zA-Z]?)(?![\w-])")
 STREETS_FOR_A_NUMBER = 2
+# ... and with no map to go by (none given, or one of the whole state), more of them
+STREETS_FOR_A_NUMBER_ANYWHERE = 5
+WIDE_MAP_KM = 30
 # the navigator waits a little longer for the timetable service, which knows the places
 PLACES_PATIENCE_SECONDS = 3.0
 
@@ -133,7 +136,7 @@ def ranked_places(points: list, place: tuple | None, radius_km: float) -> list:
     return sorted(best.values(), key=lambda p: (-p["score"], p["name"]))
 
 
-def house_numbers(query: str, places: list) -> list:
+def house_numbers(query: str, places: list, how_many: int = STREETS_FOR_A_NUMBER) -> list:
     """A house number typed without a town ("Eichstraße 9"): the timetable
     service finds the house only with the town, so the best streets of that
     name are asked for it ("Eichstraße 9 Stuttgart"). Each house found is
@@ -141,7 +144,7 @@ def house_numbers(query: str, places: list) -> list:
     number = HOUSE_NUMBER.search(query)
     if not number:
         return []
-    streets = [p for p in places if p["kind"] == "street" and ", " in p["name"]][:STREETS_FOR_A_NUMBER]
+    streets = [p for p in places if p["kind"] == "street" and ", " in p["name"]][:how_many]
 
     def look(street):
         town, road = street["name"].split(", ", 1)
@@ -163,6 +166,27 @@ def house_numbers(query: str, places: list) -> list:
     return [house for house in _pool.map(look, streets) if house]
 
 
+# an address exactly as typed (street and house number) comes first: whoever types
+# "Aldinger Straße 212" means that house, not a stop on some Aldinger Straße
+EXACT_HOUSE_BONUS = 1.3
+
+
+def same_spelling(text: str) -> str:
+    """Folded, without spaces, "Straße" / "Str." alike: "Aldinger Str. 212" = "Aldingerstraße 212"."""
+    return stop_index.fold(text).replace(" ", "").replace("strasse", "str")
+
+
+def exact_houses_first(query: str, places: list) -> list:
+    if not HOUSE_NUMBER.search(query):
+        return places
+    typed = same_spelling(query)
+    for p in places:
+        street = p["name"].split(", ", 1)[-1]
+        if p["kind"] == "address" and HOUSE_NUMBER.search(street) and same_spelling(street) in typed:
+            p["score"] = round(p["score"] * EXACT_HOUSE_BONUS, 4)
+    return places
+
+
 def route_search(query: str, near: str = "", radius: str = "", limit: str = "") -> dict:
     """The navigator's search (`places=1`): {stops, places, results}.
     `stops` as search() gives them; `places` the sights, addresses and
@@ -181,7 +205,8 @@ def route_search(query: str, near: str = "", radius: str = "", limit: str = "") 
     except client.EfaError:
         points = []
     places = ranked_places(points, place, radius_km)
-    places = sorted(house_numbers(query, places) + places, key=lambda p: (-p["score"], p["name"]))[:PLACES_LIMIT]
+    how_many = STREETS_FOR_A_NUMBER if place and radius_km < WIDE_MAP_KM else STREETS_FOR_A_NUMBER_ANYWHERE
+    places = sorted(exact_houses_first(query, house_numbers(query, places, how_many) + places), key=lambda p: (-p["score"], p["name"]))[:PLACES_LIMIT]
     stops = public_stops(ranked)
     mixed = [(c["score"], {"type": "stop", **s}) for c, s in zip(ranked, stops)]
     mixed += [(p["score"], {"type": "place", **{k: v for k, v in p.items() if k != "score"}}) for p in places]
