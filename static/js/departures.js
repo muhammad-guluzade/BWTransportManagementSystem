@@ -779,18 +779,17 @@ function renderStation(data) {
     if (window.mine.isFavouriteStop(data.stop.id)) window.mine.remove(favourite);
     else window.mine.add(favourite);
   }));
-  // the navigator (the user's choice 1B): one button by the name, "Route to here";
-  // the start is chosen in the form, My location offered first (route.js)
+  // the navigator: one button by the name: a journey FROM this stop, To ready for typing (route.js)
   if (window.route) {
-    const toHere = el('button', 'route-here');
-    toHere.type = 'button';
-    toHere.title = 'Route to here';
-    toHere.setAttribute('aria-label', 'Route to here');
-    toHere.onclick = (e) => {
-      e.stopPropagation();
-      window.route.startWith('to', { kind: 'stop', id: data.stop.id, name: data.stop.name, lat: data.stop.lat, lon: data.stop.lon });
+    const fromHere = el('button', 'route-here');
+    fromHere.type = 'button';
+    fromHere.title = 'Route from here';
+    fromHere.setAttribute('aria-label', 'Route from here');
+    fromHere.onclick = (e) => {
+      e.stopPropagation();   // (a tap elsewhere would close To's list)
+      window.route.startWith('from', { kind: 'stop', id: data.stop.id, name: data.stop.name, lat: data.stop.lat, lon: data.stop.lon });
     };
-    name.appendChild(toHere);
+    name.appendChild(fromHere);
   }
   stationBox.appendChild(name);
 

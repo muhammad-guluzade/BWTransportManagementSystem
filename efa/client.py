@@ -18,6 +18,9 @@ from efa.localtime import to_local
 EFA_BASE = "https://www.efa-bw.de/nvbw/"
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; TransitDemo/0.1)"}
 TIMEOUT = 10
+# The journey planner can be slow: measured 0.8-6 s by day, 17-26 s at 01:00 (Reutlingen),
+# sometimes a quick 502 from its gateway; it gets more time and one more try.
+JOURNEYS_TIMEOUT = 40
 
 # how long a response may be reused, in seconds
 STOP_SEARCH_TTL = 600
@@ -79,11 +82,12 @@ class EfaError(Exception):
     """EFA could not be reached or returned something that isn't JSON."""
 
 
-def efa_get(endpoint: str, params: dict, ttl: int = 0, keep=None) -> dict:
+def efa_get(endpoint: str, params: dict, ttl: int = 0, keep=None, timeout: float = TIMEOUT, retry: bool = False) -> dict:
     """Call an EFA endpoint and return parsed JSON, reusing a cached
     response if one younger than `ttl` seconds exists. `keep(data)` can say
     that an answer is not worth remembering: it is returned, but the next
-    call asks EFA again."""
+    call asks EFA again. `retry`: a quick server error (5xx within 10 s) is
+    asked once more."""
     key = (endpoint, tuple(sorted(params.items())))
     now = time.monotonic()
 
@@ -94,7 +98,10 @@ def efa_get(endpoint: str, params: dict, ttl: int = 0, keep=None) -> dict:
                 return hit[1]
 
     try:
-        resp = _session.get(EFA_BASE + endpoint, params=params, timeout=TIMEOUT)
+        started = time.monotonic()
+        resp = _session.get(EFA_BASE + endpoint, params=params, timeout=timeout)
+        if retry and resp.status_code >= 500 and time.monotonic() - started < 10:
+            resp = _session.get(EFA_BASE + endpoint, params=params, timeout=timeout)
         resp.raise_for_status()
         resp.encoding = "utf-8"  # EFA doesn't declare charset correctly; don't let requests guess
         data = resp.json()
@@ -245,7 +252,7 @@ def get_journeys(origin: str, destination: str, start: datetime | None = None, a
         params["includedMeans"] = "checkbox"
         for cls in classes:
             params[f"inclMOT_{cls}"] = "on"
-    return efa_get("XML_TRIP_REQUEST2", params, ttl=JOURNEYS_TTL)
+    return efa_get("XML_TRIP_REQUEST2", params, ttl=JOURNEYS_TTL, timeout=JOURNEYS_TIMEOUT, retry=True)
 
 
 def place_param(lat: float, lon: float) -> str:

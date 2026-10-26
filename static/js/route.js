@@ -33,6 +33,9 @@
   // ... and at once when the page is looked at again after this long
   const STALE_MS = 30000;
   const SEARCH_DELAY_MS = 200;
+  // after this long the loading card says the timetable service is slow
+  const SLOW_MS = 6000;
+  let slow = false;
   const PLACE_KINDS = { place: 'Place', address: 'Address', street: 'Street' };
   const OTHER = { from: 'to', to: 'from' };
   const END_NAMES = { from: 'The start', to: 'The destination' };
@@ -59,8 +62,6 @@
   let lastUrl = '';
   let searchId = 0;          // a new search: answers to older ones are dropped
   let loadCounter = 0;
-  let loadingMore = null;    // 'earlier' | 'later' while that page loads
-  let moreNote = { earlier: '', later: '' };
   // what is open: one connection, and in it some lists of stops and notices
   let openId = null;
   const openStops = new Set();
@@ -513,8 +514,6 @@
   function changed({ again = false, plan = false } = {}) {
     const listed = state === 'loading' || state === 'ready' || state === 'error';
     searchId++;
-    loadingMore = null;
-    moreNote = { earlier: '', later: '' };
     openId = null;
     openStops.clear();
     openNotices.clear();
@@ -555,6 +554,8 @@
       folded = true;
       quiet = false;
       state = 'loading';
+      slow = false;
+      setTimeout(() => { if (search === searchId && state === 'loading') { slow = true; renderBoard(); } }, SLOW_MS);
       renderAll();
       // on a phone the sheet comes up for the list (sheet.js)
       document.dispatchEvent(new CustomEvent('route-searched'));
@@ -593,32 +594,15 @@
     held();
   }
 
-  async function more(direction) {
-    if (loadingMore || !journeys.length) return;
-    const search = searchId;
-    const edge = direction === 'later' ? journeys[journeys.length - 1] : journeys[0];
-    const page = direction === 'later'
-      ? { when: germanText(new Date(new Date(edge.departure.planned).getTime() + 60000)), arrive: false }
-      : { when: germanText(new Date(new Date(edge.arrival.planned).getTime() - 60000)), arrive: true };
-    loadingMore = direction;
-    moreNote[direction] = '';
-    renderBoard();
-    const answer = await fetchPage(page);
-    if (search !== searchId) return;
-    loadingMore = null;
-    if (!answer.ok) {
-      moreNote[direction] = answer.message;
-    } else {
-      pages.push(page);
-      const before = journeys.length;
-      const held = holdCards();
-      journeys = merge([...journeys, ...answer.data.journeys]);
-      if (journeys.length === before) moreNote[direction] = `No ${direction} connections found.`;
-      renderAll();
-      held();
-      return;
-    }
-    renderBoard();
+  // Earlier / Later (the user's rule): the time moves 15 minutes and a new list
+  // is asked for, as the departures do with their hour
+  const STEP_HOURS = 0.25;
+  function shift(direction) {
+    const base = time.value || tools.germanNow();
+    time.value = tools.clamp(tools.add(base, direction === 'later' ? STEP_HOURS : -STEP_HOURS));
+    time.arrive = time.arrive && Boolean(time.value);
+    drawChip();
+    changed({ plan: true });
   }
 
   // the list is asked again now and then while it is looked at
@@ -674,7 +658,8 @@
   document.addEventListener('map-touched', () => {
     if (mode !== 'route' || wide.matches) return;
     if (!form.contains(document.activeElement)) folded = true;
-    quiet = true;
+    // (an opened connection stays in the bar; only an empty bar says nothing)
+    quiet = !openId;
     fold();
   });
   document.addEventListener('sheet-changed', () => {
@@ -694,7 +679,8 @@
   function statusText() {
     if (state === 'idle' && ends.from && ends.to) return locating() ? 'Finding your location...' : 'Ready: press Search to see the connections.';
     if (state === 'idle') return 'Type a stop, a place or an address, use your location, or tap the map.';
-    if (state === 'loading') return locating() ? 'Finding your location...' : 'Looking for connections...';
+    if (state === 'loading') return locating() ? 'Finding your location...'
+      : slow ? 'Still looking: the timetable service is slow right now (this can take up to half a minute)...' : 'Looking for connections...';
     if (state === 'error' || state === 'problem') return problem.message;
     const now = new Date(updatedAt);
     const count = journeys.length === 1 ? '1 connection' : `${journeys.length} connections`;
@@ -793,14 +779,13 @@
   function moreButtons() {
     const box = el('div', 'route-more-box');
     ['earlier', 'later'].forEach(direction => {
-      const button = el('button', 'route-more', loadingMore === direction ? 'Loading...' : direction === 'earlier' ? 'Earlier' : 'Later');
+      const button = el('button', 'route-more', direction === 'earlier' ? 'Earlier' : 'Later');
       button.type = 'button';
       button.dataset.more = direction;
-      button.disabled = Boolean(loadingMore);
-      button.onclick = () => more(direction);
+      button.title = direction === 'earlier' ? '15 minutes earlier' : '15 minutes later';
+      button.onclick = () => shift(direction);
       box.appendChild(button);
     });
-    ['earlier', 'later'].forEach(direction => { if (moreNote[direction]) box.appendChild(el('span', 'route-more-note', moreNote[direction])); });
     return box;
   }
 
@@ -880,7 +865,8 @@
     renderAll();
     document.dispatchEvent(new CustomEvent('route-changed'));
     if (!id) return;
-    if (window.sheet && window.sheet.state() === 'peek') document.dispatchEvent(new CustomEvent('sheet-request', { detail: { state: 'list' } }));
+    // the map shows the route: the sheet at half height (the user's rule; the details are a drag up)
+    if (window.sheet && window.sheet.state()) document.dispatchEvent(new CustomEvent('sheet-request', { detail: { state: 'half' } }));
     // on a phone with the sheet at half height: the opened connection moves up
     const opened = routeBoard.querySelector('.conn.open');
     if (opened && window.sheet && window.sheet.state()) {
@@ -1040,22 +1026,15 @@
 
   // ---------- from elsewhere ----------
   // "Route from here" / "Route to here" on a stop's departures, and the map's popup
-  // "Route to here" on a stop: Route mode with that destination; the start is
-  // chosen next: on a laptop its field is ready for typing, on a phone its list
-  // (My location first, then the recent stops) is open, and a tap in the field
-  // brings the keyboard
+  // A stop's route button (the user's rule): Route mode with that stop as the
+  // start, and To ready for typing at once (focused within the tap, so a phone
+  // brings up its keyboard; a place already in To is shown as it is)
   function startWith(end, place) {
     setMode('route');
     folded = false;
     choose(end, place);
     fold();
-    const other = OTHER[end];
-    if (ends[other]) return;
-    setTimeout(() => {   // (after the click that got here: it would close the list again)
-      if (mode !== 'route') return;
-      if (wide.matches) fields[other].input.focus();
-      else suggest(other);
-    }, 0);
+    fields[OTHER[end]].input.focus();
   }
 
   drawChip();
@@ -1068,7 +1047,8 @@
     hasContent: () => mode === 'route' && state !== 'idle',
     openId: () => openId,
     close: () => toggle(null),
-    choose: (end, place) => choose(end, place),
+    // (the map's "From here / To here": the form opens, so the choice can be seen)
+    choose: (end, place) => { folded = false; choose(end, place); fold(); },
     search,
     folded: () => folded,
     quiet: () => quiet,

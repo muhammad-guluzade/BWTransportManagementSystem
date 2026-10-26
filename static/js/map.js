@@ -162,8 +162,11 @@
   // (a tap that only closes the question of Route mode asks nothing new)
   let popupWasOpen = false;
   map.on('preclick', () => { popupWasOpen = Boolean(routePopup && map.hasLayer(routePopup)); });
+  // Route mode on a phone (the user's rule): while the sheet is open, the
+  // first tap on the map only lowers it; the next one asks "from or to here?"
+  const sheetOpen = () => Boolean(window.sheet && window.sheet.mode() === 'sheet' && window.sheet.state() !== 'peek');
   map.on('click', (e) => {
-    if (routeMode() && !popupWasOpen) askRoute(e.latlng, { kind: 'place', id: null, name: 'Point on the map', lat: e.latlng.lat, lon: e.latlng.lng });
+    if (routeMode() && !popupWasOpen && !sheetOpen()) askRoute(e.latlng, { kind: 'place', id: null, name: 'Point on the map', lat: e.latlng.lat, lon: e.latlng.lng });
     touched('tap');
   });
   map.on('dragstart', () => touched('drag'));
@@ -211,13 +214,16 @@
     // least important first, so the important markers end up on top
     stops.slice().reverse().forEach(stop => {
       const selected = stop.id === selectedId && !routeMode();
+      // a connection drawn: the stops it doesn't use step back, so the route stands out
+      const faded = routeMode() && routeStops.size > 0 && !routeStops.has(stop.id);
       const marker = L.circleMarker(positions.get(stop.id), {
         renderer: dotRenderer,
         radius: dotRadius(stop) + (selected ? 2 : 0),
         color: 'white',
         weight: selected ? 3 : 1.5,
+        opacity: faded ? 0.25 : 1,
         fillColor: colourOf(stop),
-        fillOpacity: 0.9,
+        fillOpacity: faded ? 0.12 : 0.9,
         bubblingMouseEvents: false,   // a tap on a stop is not a tap on the empty map
       });
       marker.stopId = stop.id;
@@ -226,7 +232,8 @@
       label.textContent = stop.name;
       marker.bindTooltip(label, { direction: 'top' });
       marker.on('click', () => {
-        if (routeMode()) askRoute(marker.getLatLng(), { kind: 'stop', id: stop.id, name: stop.name, lat: stop.lat, lon: stop.lon });
+        if (routeMode() && sheetOpen()) touched('tap');
+        else if (routeMode()) askRoute(marker.getLatLng(), { kind: 'stop', id: stop.id, name: stop.name, lat: stop.lat, lon: stop.lon });
         else selectStop(stop.id, stop.name, 'map');
       });
       stopsLayer.addLayer(marker);
@@ -358,6 +365,7 @@
   routePane.style.pointerEvents = 'none';
   let routePopup = null;
   let routeShown = '';   // what the map was last fitted to: it moves only when that changes
+  let routeStops = new Set();   // the stations of the connection drawn (its dots stay bright)
 
   function askRoute(at, place) {
     const box = el('div', 'route-pop');
@@ -393,6 +401,12 @@
 
   function drawRoute({ active, journey, from, to }) {
     routeLayer.clearLayers();
+    const stations = new Set();
+    if (active && journey) {
+      journey.legs.forEach(leg => [leg.from, leg.to, ...(leg.stops || [])].forEach(s => { if (s && s.id) stations.add(s.id); }));
+      [from, to].forEach(p => { if (p && p.id) stations.add(p.id); });
+    }
+    if ([...stations].join() !== [...routeStops].join()) { routeStops = stations; drawStops(lastStops); }
     if (!active) return;
     const points = [];
     if (journey) {

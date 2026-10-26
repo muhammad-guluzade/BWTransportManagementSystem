@@ -176,6 +176,58 @@ class CacheMemoryTest(unittest.TestCase):
         self.assertEqual(self.asked, [])
 
 
+class SlowPlannerTest(unittest.TestCase):
+    """The journey planner may take half a minute (measured 17-26 s at night)
+    and its gateway sometimes answers a quick 502: it gets more time and one
+    more try; other requests keep the short time and no second try."""
+
+    def setUp(self):
+        self.real_get = client._session.get
+        client._cache.clear()
+        self.calls = []
+        self.codes = []
+
+        test = self
+
+        class Answer:
+            def __init__(self, code):
+                self.status_code, self.encoding = code, None
+
+            def raise_for_status(self):
+                if self.status_code >= 400:
+                    raise client.requests.HTTPError(str(self.status_code))
+
+            def json(self):
+                return {"journeys": [], "stopEvents": []}
+
+        def fake_get(url, params=None, timeout=None):
+            test.calls.append((url.rsplit("/", 1)[-1], timeout))
+            return Answer(test.codes.pop(0) if test.codes else 200)
+        client._session.get = fake_get
+
+    def tearDown(self):
+        client._session.get = self.real_get
+        client._cache.clear()
+
+    def test_journeys_get_more_time_and_a_second_try(self):
+        self.codes = [502, 200]
+        client.get_journeys("de:08111:115", "de:08415:22006")
+        self.assertEqual(self.calls, [("XML_TRIP_REQUEST2", client.JOURNEYS_TIMEOUT)] * 2)
+        self.assertGreaterEqual(client.JOURNEYS_TIMEOUT, 30)
+
+    def test_two_failures_are_an_error(self):
+        self.codes = [502, 502]
+        with self.assertRaises(client.EfaError):
+            client.get_journeys("de:08111:115", "de:08415:22006")
+        self.assertEqual(len(self.calls), 2)
+
+    def test_other_requests_unchanged(self):
+        self.codes = [502]
+        with self.assertRaises(client.EfaError):
+            client.find_stops("Stuttgart")
+        self.assertEqual(self.calls, [("XML_STOPFINDER_REQUEST", client.TIMEOUT)])
+
+
 class AnsweringTest(unittest.TestCase):
     """client.answering(): is EFA answering normally? (a well-known station,
     asked at most once a minute)"""
