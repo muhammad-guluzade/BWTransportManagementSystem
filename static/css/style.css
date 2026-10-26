@@ -376,6 +376,21 @@ body.route-mode #search-box { display: none; }
   padding-top: calc(16px + env(safe-area-inset-top, 0px)); padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
   background: rgba(10, 14, 20, 0.28); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
 #route-when-window[hidden] { display: none; }
+/* the location guide (locationhelp.js), like the other windows */
+#location-help { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; padding: 16px;
+  padding-top: calc(16px + env(safe-area-inset-top, 0px)); padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  background: rgba(10, 14, 20, 0.28); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+#location-help[hidden] { display: none; }
+#location-help-close { width: 36px; height: 36px; padding: 0; border: none; border-radius: 50%; background: var(--accent-soft); color: var(--muted);
+  font-size: 18px; line-height: 36px; cursor: pointer; }
+.help-card { width: min(460px, 100%); gap: 12px; }
+#location-help-body { display: grid; gap: 8px; }
+.help-device { border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; }
+.help-device summary { font-weight: 650; cursor: pointer; }
+.help-device h3 { margin: 10px 0 4px; font-size: 0.8rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+.help-device ol { margin: 0; padding-left: 20px; display: grid; gap: 4px; font-size: 0.9rem; }
+/* the link to it, in the message */
+.help-link { padding: 0; border: none; background: none; color: var(--accent); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
 #route-when-close { width: 36px; height: 36px; padding: 0; border: none; border-radius: 50%; background: var(--accent-soft); color: var(--muted);
   font-size: 18px; line-height: 36px; cursor: pointer; }
 /* "D-Ticket only": a switch */

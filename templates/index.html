@@ -164,6 +164,17 @@
   </div>
 </div>
 
+<!-- how to allow the location on each kind of device (locationhelp.js) -->
+<div id="location-help" role="dialog" aria-modal="true" aria-labelledby="location-help-title" hidden>
+  <div class="settings-card help-card">
+    <div class="settings-top">
+      <h2 id="location-help-title">Allow your location</h2>
+      <button type="button" id="location-help-close" aria-label="Close">&#x2715;</button>
+    </div>
+    <div id="location-help-body"></div>
+  </div>
+</div>
+
 <!-- settings (menu.js): over a blurred page, closed with the x or Escape -->
 <div id="settings" role="dialog" aria-modal="true" aria-labelledby="settings-title" hidden>
   <div class="settings-card">
@@ -216,6 +227,7 @@
 <script src="{{ url_for('static', filename='js/when.js') }}"></script>
 <script src="{{ url_for('static', filename='js/departures.js') }}"></script>
 <script src="{{ url_for('static', filename='js/favourites.js') }}"></script>
+<script src="{{ url_for('static', filename='js/locationhelp.js') }}"></script>
 <script src="{{ url_for('static', filename='js/route.js') }}"></script>
 <script src="{{ url_for('static', filename='js/sheet.js') }}"></script>
 <script src="{{ url_for('static', filename='js/map.js') }}"></script>

@@ -406,9 +406,19 @@
       keyboard: false, zIndexOffset: 1200,
     });
     const label = document.createElement('span');
-    label.textContent = `${which === 'from' ? 'From' : 'To'}: ${place.name}`;
+    label.textContent = which === 'me' ? 'You are here' : `${which === 'from' ? 'From' : 'To'}: ${place.name}`;
     marker.bindTooltip(label, { direction: 'top', offset: [0, -10] });
     return marker;
+  }
+
+  // where the user is ("My location" in From or To): a blue dot, a pale circle for how exact it is
+  function meDot(place) {
+    if (place.accuracy > 25) {
+      L.circle([place.lat, place.lon], { pane: 'route', radius: place.accuracy, color: '#1a73e8', weight: 1, opacity: 0.4,
+        fillColor: '#1a73e8', fillOpacity: 0.1, interactive: false }).addTo(routeLayer);
+    }
+    const mark = endMark(place, 'me');
+    if (mark) mark.addTo(routeLayer);
   }
 
   function drawRoute({ active, journey, from, to }) {
@@ -440,13 +450,15 @@
           .addTo(routeLayer);
       });
     }
-    // the start and the destination are marked only with a connection drawn (the user's rule)
-    if (journey) {
-      [[from, 'from'], [to, 'to']].forEach(([place, which]) => {
-        const mark = endMark(place, which);
-        if (mark) { mark.addTo(routeLayer); points.push([place.lat, place.lon]); }
-      });
-    }
+    // the start and the destination are marked only with a connection drawn (the user's rule);
+    // the user's own position always, as the blue dot
+    [[from, 'from'], [to, 'to']].forEach(([place, which]) => {
+      if (!place || place.lat === null || place.lat === undefined) return;
+      if (place.kind === 'me') { meDot(place); if (journey) points.push([place.lat, place.lon]); return; }
+      if (!journey) return;
+      const mark = endMark(place, which);
+      if (mark) { mark.addTo(routeLayer); points.push([place.lat, place.lon]); }
+    });
     // the map moves only when there is a new connection to see
     const key = journey ? `j:${journey.id}` : '';
     if (key === routeShown) return;
@@ -462,6 +474,12 @@
   }
 
   document.addEventListener('route-drawn', (e) => drawRoute(e.detail));
+  // "My location" found: the map goes there (at street level, in the free part of the screen)
+  document.addEventListener('me-located', (e) => {
+    const at = L.latLng(e.detail.lat, e.detail.lon);
+    showAt(at, Math.max(map.getZoom(), STOP_ZOOM + 1));
+    settleTiles();
+  });
   // the other mode: the departures' selection and pin, or the route
   document.addEventListener('mode-changed', (e) => {
     const route = e.detail.mode === 'route';

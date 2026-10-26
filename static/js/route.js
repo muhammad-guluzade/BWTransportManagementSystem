@@ -338,20 +338,24 @@
     else f.input.focus();
   }
 
+  // The device said no (often without asking: its settings block websites). The
+  // message stays short; "How to allow it" opens the steps for each device (locationhelp.js).
+  const LOCATION_REFUSED = 'This device does not let the page use your location.';
+
   // "My location": the device is asked where it is (the browser asks the user first)
   function locate(end) {
     const place = ends[end];
     place.locating = true;
     place.lat = place.lon = null;
     showField(end);
-    const fail = (message) => {
+    const fail = (message, help = false) => {
       if (ends[end] !== place) return;
       ends[end] = null;
       showField(end);
       searchWanted = false;
       changed();
       state = 'problem';
-      problem = { message, retry: false };
+      problem = { message, retry: false, help };
       renderAll();
     };
     if (!window.isSecureContext || !navigator.geolocation) {
@@ -364,13 +368,16 @@
       place.locating = false;
       place.lat = position.coords.latitude;
       place.lon = position.coords.longitude;
+      place.accuracy = position.coords.accuracy;
       showField(end);
+      // the map goes to where the user is, the blue dot on it (map.js)
+      document.dispatchEvent(new CustomEvent('me-located', { detail: { lat: place.lat, lon: place.lon, accuracy: place.accuracy } }));
       // Enter / Search was pressed while it was being found: now the connections
       if (searchWanted) { searchWanted = false; search(); } else renderAll();
     }, (error) => {
-      fail(error.code === 1 ? 'This page may not use your location. Allow it in the browser\'s settings, or type a stop or a place.'
-        : error.code === 3 ? 'Finding your location took too long. Try again, or type a stop or a place.'
-          : 'Your location could not be found. Type a stop or a place instead.');
+      fail(error.code === 1 ? LOCATION_REFUSED
+        : error.code === 3 ? 'Finding your location took too long.'
+          : 'Your location could not be found.', true);
     }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
   }
 
@@ -768,9 +775,18 @@
       }
     } else {
       peek.appendChild(el('span', 'route-peek-text', state === 'ready' ? (empty ? 'No connections' : 'No connections left') : statusText()));
+      if (state === 'problem' && problem && problem.help) peek.appendChild(helpLink());
     }
     head.appendChild(peek);
     head.appendChild(el('div', state === 'error' || state === 'problem' ? 'route-status late' : 'route-status', statusText()));
+  }
+
+  // "How to allow it": the steps for each kind of device (locationhelp.js)
+  function helpLink() {
+    const link = el('button', 'help-link', 'How to allow it');
+    link.type = 'button';
+    link.onclick = (e) => { e.stopPropagation(); window.locationHelp.open(); };
+    return link;
   }
 
   // "✕ Close": the opened connection is given up (its route leaves the map)
@@ -817,6 +833,12 @@
     }
     if (state === 'error' || state === 'problem') {
       const box = notice(problem.message);
+      if (problem.help) {
+        const line = el('p', '');
+        line.appendChild(helpLink());
+        line.appendChild(document.createTextNode(' Or type a stop or an address instead.'));
+        box.appendChild(line);
+      }
       if (problem.retry) {
         const again = el('button', 'route-more', 'Try again');
         again.type = 'button';
