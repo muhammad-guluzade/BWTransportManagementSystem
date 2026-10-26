@@ -85,6 +85,15 @@ class ParseJourneyTest(unittest.TestCase):
         self.assertEqual((ice["line"], ice["dticket"], ice["brand"]), ("ICE 569", False, "ice"))
         self.assertFalse(j["dticket"])
 
+    def test_the_french_copy_of_a_tgv_is_called_tgv(self):
+        sncf = {"id": "snc:89FRL:9:R:26o", "name": "Zug", "number": None, "product": {"id": 0, "class": 13, "name": "Zug"},
+                "operator": {"id": "x0008", "name": "SNCF"}, "destination": {"name": "Paris Est"},
+                "properties": {"tripCode": 3, "attributes": ["LONG_DISTANCE_TRAINS", "SUPPLEMENT"]}}
+        legs = parse.parse_journey(journey(second=sncf))["legs"]
+        self.assertEqual(legs[-1]["line"], "TGV")
+        regional = {**sncf, "properties": {"tripCode": 3, "attributes": []}}     # (a numberless regional train stays as it is)
+        self.assertEqual(parse.parse_journey(journey(second=regional))["legs"][-1]["line"], "Zug")
+
     def test_walks_of_both_kinds(self):
         for cls in (99, 100):
             leg = walk(platform(PRAG, "a", "1", [48.0, 9.0]), platform(ULM, "b", "2", [48.1, 9.1]), 5, cls)
@@ -128,7 +137,16 @@ class PlanTest(unittest.TestCase):
         self.answer = {"journeys": [journey()]}
         self.asked = []
 
+        self.rail_answer = {"journeys": []}
+        self.rail_asked = []
+
         def fake(origin, destination, start=None, arrive=False, classes=(), count=5):
+            # the second question, without buses, is answered on its own (see AlternativesTest)
+            if list(classes) and set(classes) <= set(journeys.WITHOUT_BUSES):
+                self.rail_asked.append((origin, destination, start, arrive, tuple(classes), count))
+                if isinstance(self.rail_answer, Exception):
+                    raise self.rail_answer
+                return self.rail_answer
             self.asked.append((origin, destination, start, arrive, tuple(classes), count))
             return self.answer
         client.get_journeys = fake
@@ -229,6 +247,36 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(journeys.plan(PRAG, ULM)["empty"], "none")
         departures.outside_timetable = lambda start: True
         self.assertEqual(journeys.plan(PRAG, ULM, start=LATER)["empty"], "no_timetable")
+
+    def test_alternatives_without_buses_are_added(self):
+        """The planner keeps the fastest connections; a slower one by train or
+        S-Bahn is asked for separately and added (DB shows such alternatives)."""
+        rail = journey(second=ICE, change_at=20)
+        self.rail_answer = {"journeys": [journey(), rail]}           # the first one the planner had already
+        result = journeys.plan(PRAG, ULM)
+        self.assertEqual(len(result["journeys"]), 2)
+        self.assertEqual(len(self.rail_asked), 1)
+        self.assertNotIn(5, self.rail_asked[0][4])                     # no buses
+        self.assertEqual(sorted(j["departure"]["time"] for j in result["journeys"]), [j["departure"]["time"] for j in result["journeys"]])
+        # with D-Ticket only, the second question has no long-distance trains either
+        self.rail_asked.clear()
+        journeys.plan(PRAG, ULM, dticket=True)
+        self.assertNotIn(16, self.rail_asked[0][4])
+
+    def test_alternatives_are_a_bonus(self):
+        # its question failing, the first answer is shown alone
+        self.rail_answer = client.EfaError("down")
+        self.assertEqual(len(journeys.plan(PRAG, ULM)["journeys"]), 1)
+        # a walk only, or much later than the rest: no alternative
+        walk_only = journey()
+        walk_only["legs"] = [walk(walk_only["legs"][0]["origin"], walk_only["legs"][-1]["destination"], 120)]
+        late = journey(change_at=14)
+        for leg in late["legs"]:
+            for end in (leg["origin"], leg["destination"]):
+                for key in [k for k in end if k.endswith("Planned") or k.endswith("Estimated")]:
+                    end[key] = at(200)
+        self.rail_answer = {"journeys": [walk_only, late]}
+        self.assertEqual(len(journeys.plan(PRAG, ULM)["journeys"]), 1)
 
     def test_one_unreadable_connection_is_skipped(self):
         broken = journey()

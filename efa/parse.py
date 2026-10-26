@@ -802,6 +802,17 @@ def change_minutes_needed(walk: dict | None, arriving: dict, leaving: dict) -> i
     return CHANGE_SAME_PLATFORM_MINUTES if same else CHANGE_OTHER_PLATFORM_MINUTES
 
 
+def journey_line(line: str, transportation: dict) -> str:
+    """A ride's name in a connection. The French railways' copy of a TGV comes
+    without a number ("Zug", operator SNCF, a long-distance train); on the boards
+    DB's numbered copy stands for it (dedupe), in a connection there is no twin,
+    so it is called what it is."""
+    attributes = (transportation.get("properties") or {}).get("attributes") or []
+    if line == "Zug" and "SNCF" in str((transportation.get("operator") or {}).get("name") or "") and "LONG_DISTANCE_TRAINS" in attributes:
+        return "TGV"
+    return line
+
+
 def parse_journey(journey: dict, importance: dict | None = None) -> dict | None:
     """One connection: {id, departure, arrival, minutes, changes, dticket,
     legs: [...], transfers: [...]}. None if it can't be read."""
@@ -823,7 +834,7 @@ def parse_journey(journey: dict, importance: dict | None = None) -> dict | None:
         stops = trip_stops((leg.get("stopSequence") or [])[1:-1], city, arriving=True, skip=start["id"], mode=ride["mode"])
         legs.append({
             "kind": "ride",
-            "line": ride["line"],
+            "line": journey_line(ride["line"], leg.get("transportation") or {}),
             "mode": ride["mode"],
             "brand": ride["brand"],
             "destination": ride["destination"],

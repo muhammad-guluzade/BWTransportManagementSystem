@@ -569,6 +569,11 @@ Baden-Württemberg; the journey itself may pass through other states.
 | `arrive` | optional | `1`: `when` is the latest arrival ("arrive by"), not the departure. |
 | `dticket` | optional | `1`: only connections whose every ride is valid with the Deutschlandticket (no ICE, IC/EC, Flixbus ...). |
 
+The journey planner keeps only the fastest connections; the planner is also asked for connections
+without buses (trains, S-Bahn, U-Bahn, tram), and up to 3 of those that its first answer did not
+have are added (each with a ride, arriving at most an hour after the latest connection found), so
+a slower connection by S-Bahn is offered next to a faster one by bus.
+
 Connections that left before `when` (or now) are left out, and with `arrive`
 those arriving after `when`; flights and on-demand services are never
 offered. Example (shortened to one connection; times in UTC):

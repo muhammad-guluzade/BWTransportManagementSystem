@@ -9,6 +9,7 @@ map, or the user's location)."""
 import logging
 import re
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 from efa import client, parse
@@ -21,6 +22,16 @@ log = logging.getLogger(__name__)
 DTICKET_CLASSES = sorted(parse.DTICKET_CLASSES)
 # more connections are asked for with the switch on: some still fall out
 JOURNEYS, JOURNEYS_DTICKET = 6, 8
+# The planner keeps only the fastest connections; a slower one by S-Bahn is
+# left out even when people would take it (DB shows such alternatives). So it
+# is also asked for connections without buses, and up to this many of them that
+# its first answer did not have are added (the user's choice, 2026-10-27).
+WITHOUT_BUSES = [0, 1, 2, 3, 4, 13, 14, 15, 16]   # trains, S-Bahn, U-Bahn / Stadtbahn, tram
+RAIL_JOURNEYS = 4
+RAIL_ALTERNATIVES = 3
+RAIL_LATER_MINUTES = 60   # an alternative arrives at most this much after the latest connection found
+# the two questions go to the planner at the same time
+_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="journeys")
 # a point counts as in Baden-Württemberg when a stop of the state is this near
 NEAR_A_STOP_DEGREES = 0.03          # about 3 km
 POINT = re.compile(r"^\s*(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*$")
@@ -85,20 +96,9 @@ def ride_events(raw: dict) -> list:
     return [parse.leg_as_event(leg) for leg in raw.get("legs") or [] if isinstance(leg, dict) and not parse.is_walk(leg)]
 
 
-def plan(origin: str, destination: str, start: datetime | None = None, arrive: bool = False, dticket: bool = False) -> dict:
-    """{from, to, when, arrive, dticket, journeys: [...], empty}. `start` is
-    a UTC moment (None: now): the departure, or with `arrive` the latest
-    arrival. `dticket`: only connections valid with the Deutschlandticket."""
-    asked_from, start_place = place(origin, "from")
-    asked_to, end_place = place(destination, "to")
-    data = client.get_journeys(asked_from, asked_to, start, arrive, DTICKET_CLASSES if dticket else (),
-                               JOURNEYS_DTICKET if dticket else JOURNEYS)
-    # a point near the state's border can still be across it (Neu-Ulm): the
-    # town the planner found there says which state
-    for which, asked, end in (("from", start_place, "origin"), ("to", end_place, "destination")):
-        if asked["kind"] == "place" and town_in_bw(data, end) is False:
-            raise InvalidPlace(f"{which} is outside Baden-Württemberg")
-    importance = departures.stop_importance()
+def read_journeys(data: dict, importance: dict, dticket: bool) -> list:
+    """The connections of one planner answer, read with the boards' rules
+    (no flights or on-demand services; with `dticket` only valid ones)."""
     journeys, seen = [], set()
     for raw in data.get("journeys") or []:
         if not isinstance(raw, dict):
@@ -119,6 +119,38 @@ def plan(origin: str, destination: str, start: datetime | None = None, arrive: b
             if leg["kind"] == "ride" and leg["mode"] in departures.TRAIN_MODES:
                 leg["mode"] = departures.TRAINS     # as on the boards: one kind "Trains"
         journeys.append(journey)
+    return journeys
+
+
+def plan(origin: str, destination: str, start: datetime | None = None, arrive: bool = False, dticket: bool = False) -> dict:
+    """{from, to, when, arrive, dticket, journeys: [...], empty}. `start` is
+    a UTC moment (None: now): the departure, or with `arrive` the latest
+    arrival. `dticket`: only connections valid with the Deutschlandticket."""
+    asked_from, start_place = place(origin, "from")
+    asked_to, end_place = place(destination, "to")
+    rail_classes = [c for c in WITHOUT_BUSES if not dticket or c in DTICKET_CLASSES]
+    rail_asked = _pool.submit(client.get_journeys, asked_from, asked_to, start, arrive, rail_classes, RAIL_JOURNEYS)
+    data = client.get_journeys(asked_from, asked_to, start, arrive, DTICKET_CLASSES if dticket else (),
+                               JOURNEYS_DTICKET if dticket else JOURNEYS)
+    try:
+        rail_data = rail_asked.result()
+    except client.EfaError:
+        rail_data = {}   # (the alternatives are a bonus: the first answer is shown alone)
+    # a point near the state's border can still be across it (Neu-Ulm): the
+    # town the planner found there says which state
+    for which, asked, end in (("from", start_place, "origin"), ("to", end_place, "destination")):
+        if asked["kind"] == "place" and town_in_bw(data, end) is False:
+            raise InvalidPlace(f"{which} is outside Baden-Württemberg")
+    importance = departures.stop_importance()
+    journeys = read_journeys(data, importance, dticket)
+    known = {j["id"] for j in journeys}
+    latest = max((j["arrival"]["time"] or "" for j in journeys), default="")
+    limit = (datetime.strptime(latest, "%Y-%m-%dT%H:%M:%SZ") + timedelta(minutes=RAIL_LATER_MINUTES)).strftime("%Y-%m-%dT%H:%M:%SZ") if latest else ""
+    # (a ride at least: a long walk is no alternative; not much later than the others)
+    extra = [j for j in read_journeys(rail_data, importance, dticket) if j["id"] not in known
+             and any(leg["kind"] == "ride" for leg in j["legs"]) and (not limit or (j["arrival"]["time"] or "") <= limit)]
+    # the ones arriving soonest; the list is put in order below
+    journeys += sorted(extra, key=lambda j: j["arrival"]["time"] or "")[:RAIL_ALTERNATIVES]
     if arrive and start:
         # the planner also offers some that arrive later than asked
         latest = start.strftime("%Y-%m-%dT%H:%M:%SZ")
