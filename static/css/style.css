@@ -569,8 +569,9 @@ body.route-mode #panel-close { display: none !important; }
 @media (max-width: 1023.98px) {
   html, body { overflow: hidden; overscroll-behavior: none; }
   .brand { display: none; }
-  #top { position: fixed; top: 0; left: 0; right: 0; z-index: 1500; display: flex; flex-direction: column; gap: 8px;
-    padding: calc(10px + env(safe-area-inset-top, 0px)) 12px 10px; pointer-events: none; }
+  #top { position: fixed; top: 0; left: 0; right: 0; z-index: 1500; padding: calc(10px + env(safe-area-inset-top, 0px)) 12px 10px; pointer-events: none; }
+  /* (navigator: the search box and the route form one under the other) */
+  body.has-navigator #top { display: flex; flex-direction: column; gap: 8px; }
   #search-box { max-width: none; pointer-events: auto; }
   /* the two modes (the user's choice 2A): no switch; a route icon in the search box, and in Route
      mode a "‹" beside the form goes back. In Route mode the bar is a card with the form. */
