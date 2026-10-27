@@ -29,6 +29,14 @@
   <button type="button">Reload</button>
 </div>
 
+{% if navigator %}
+<!-- something went wrong with the followed connection (follow.js): tap to see it -->
+<div id="follow-alert" role="alert" hidden>
+  <span class="follow-alert-text"></span>
+  <button type="button" class="follow-alert-close" aria-label="Close">&#x2715;</button>
+</div>
+{% endif %}
+
 <!-- One page, two layouts (style.css): on phones and tablets the map fills the
      screen and the panel is a sheet that slides up from the bottom (sheet.js);
      on wider screens the map is on the left and the panel on the right. -->
@@ -92,6 +100,11 @@
     <div id="map-note" hidden></div>
     <button type="button" id="favourites-toggle" aria-controls="favourites" aria-expanded="false" aria-label="Favourites" title="Favourites">&#x2605;</button>
     <button type="button" id="menu-toggle" aria-controls="settings" aria-expanded="false" aria-label="Settings">&#x22EF;</button>
+    {% if navigator %}
+    <!-- where the user is, live (position.js) -->
+    <button type="button" id="locate-me" aria-label="Show my location" title="Show my location"></button>
+    <div id="position-note" role="status" hidden></div>
+    {% endif %}
   </section>
 
   <section id="panel" aria-label="Departures">
@@ -243,9 +256,13 @@
 {% if navigator %}
 <script src="{{ url_for('static', filename='js/locationhelp.js') }}"></script>
 <script src="{{ url_for('static', filename='js/route.js') }}"></script>
+<script src="{{ url_for('static', filename='js/follow.js') }}"></script>
 {% endif %}
 <script src="{{ url_for('static', filename='js/sheet.js') }}"></script>
 <script src="{{ url_for('static', filename='js/map.js') }}"></script>
+{% if navigator %}
+<script src="{{ url_for('static', filename='js/position.js') }}"></script>
+{% endif %}
 <script src="{{ url_for('static', filename='js/address.js') }}"></script>
 
 </body>

@@ -66,6 +66,9 @@
   let loadCounter = 0;
   // what is open: one connection, and in it some lists of stops and notices
   let openId = null;
+  // the followed connection (follow.js) is what the board shows, not the list
+  let followShown = false;
+  const following = () => Boolean(window.follow && window.follow.active());
   const openStops = new Set();
   const openNotices = new Set();
 
@@ -99,7 +102,8 @@
     mode = next;
     const route = mode === 'route';
     quiet = false;
-    if (route && !(ends.from && ends.to)) folded = false;   // the form open, to choose From and To
+    if (route && following() && state === 'idle') { followShown = true; folded = true; }
+    if (route && !(ends.from && ends.to) && !followShown) folded = false;   // the form open, to choose From and To
     document.body.classList.toggle('route-mode', route);
     switchBox.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === mode)));
     form.hidden = !route;
@@ -577,6 +581,7 @@
     updateProblem = '';
     problem = null;
     state = 'idle';
+    followShown = false;
     if ((plan || (again && listed)) && ready()) {
       if (samePlace(ends.from, ends.to)) { state = 'problem'; problem = { message: 'Start and destination are the same.', retry: false }; }
       else {
@@ -705,6 +710,13 @@
     document.body.classList.toggle('route-compact', mode === 'route' && !wide.matches && folded);
     document.body.classList.toggle('route-quiet', mode === 'route' && !wide.matches && quiet);
     summary.innerHTML = '';
+    if (mode === 'route' && followShown && following()) {
+      // the followed connection's places (after "Take it" they can differ from the form's); a tap plans another journey
+      const v = window.follow.view();
+      summary.appendChild(el('span', 'route-summary-places', `${v.from.name} → ${v.to.name}`));
+      summary.appendChild(el('span', 'route-summary-time', 'Following · tap to plan another journey'));
+      return;
+    }
     const places = ends.from && ends.to ? `${nameOf(ends.from)} → ${nameOf(ends.to)}`
       : ends.from ? `${nameOf(ends.from)} → ?` : ends.to ? `? → ${nameOf(ends.to)}` : 'Plan a journey';
     summary.appendChild(el('span', 'route-summary-places', places));
@@ -720,7 +732,7 @@
     if (mode !== 'route' || wide.matches) return;
     if (!form.contains(document.activeElement)) folded = true;
     // (an opened connection stays in the bar; only an empty bar says nothing)
-    quiet = !openId;
+    quiet = !openId && !(followShown && following());
     fold();
   });
   document.addEventListener('sheet-changed', () => {
@@ -752,6 +764,7 @@
   function renderHead() {
     head.innerHTML = '';
     if (mode !== 'route') return;
+    if (followShown && following()) { renderFollowHead(window.follow.view()); return; }
     if (ends.from && ends.to) {
       const title = el('h2', 'route-title');
       title.appendChild(el('span', '', nameOf(ends.from)));
@@ -808,6 +821,8 @@
   function renderBoard() {
     routeBoard.innerHTML = '';
     if (mode !== 'route') return;
+    if (followShown && following()) { renderFollow(window.follow.view()); return; }
+    if (following()) routeBoard.appendChild(followBanner());
     if (state === 'idle' && ends.from && ends.to) {
       routeBoard.appendChild(notice(locating() ? 'Finding your location...'
         : 'Press Search (or Enter, or the keyboard\'s search key in To) to see the connections.', 'notice route-hint'));
@@ -984,7 +999,8 @@
     return el('span', 'late', `Only ${left} min to change (${t.needed_minutes} needed)`);
   }
 
-  function details(j) {
+  // `followed`: the followed connection's view (follow.js): done / now marked, no buttons
+  function details(j, followed = null) {
     const wrap = el('div', 'conn-details');
     // on a phone, when the sheet covers the map (style.css shows it only then)
     const actions = el('div', 'conn-actions');
@@ -992,7 +1008,8 @@
     toMap.type = 'button';
     toMap.onclick = (e) => { e.stopPropagation(); document.dispatchEvent(new CustomEvent('sheet-request', { detail: { state: 'half' } })); };
     actions.appendChild(toMap);
-    actions.appendChild(closeButton());
+    if (!followed && window.follow) actions.appendChild(followButton(j));
+    if (!followed) actions.appendChild(closeButton());
     wrap.appendChild(actions);
 
     const steps = [];
@@ -1004,25 +1021,29 @@
         const [name, address] = placeName(leg.from, i === 0 ? 'from' : null);
         const transfer = prev && prev.kind === 'ride' ? j.transfers[rideCount - 1] : null;
         const to = leg.to.kind === 'place' ? placeName(leg.to, i === j.legs.length - 1 ? 'to' : null)[0] : leg.to.name;
-        step(steps, { time: leg.from, name, address, platform: i ? platformText(leg.from) : '', colour: 'walk', dot: prev ? colourOf(prev) : 'var(--text)',
+        step(steps, { leg: i, time: leg.from, name, address, platform: i ? platformText(leg.from) : '', colour: 'walk', dot: prev ? colourOf(prev) : 'var(--text)',
           sub: [`🚶 ${leg.minutes} min walk${leg.metres ? ` (${leg.metres} m)` : ''} to ${to}`, transfer && j.legs[i + 1] ? transferText(transfer) : null] });
         return;
       }
       // a change at the same stop: first where the last ride ends
       if (prev && prev.kind === 'ride') {
-        step(steps, { time: prev.to, name: prev.to.name, platform: platformText(prev.to), colour: 'change', dot: colourOf(prev),
+        step(steps, { change: i, time: prev.to, name: prev.to.name, platform: platformText(prev.to), colour: 'change', dot: colourOf(prev),
           sub: ['Change', transferText(j.transfers[rideCount - 1])] });
       }
       rideCount += 1;
       const [name, address] = placeName(leg.from, i === 0 ? 'from' : null);
-      step(steps, { time: leg.from, name, address, platform: platformText(leg.from), colour: colourOf(leg), dot: colourOf(leg), ride: leg, index: i, journey: j });
+      step(steps, { leg: i, time: leg.from, name, address, platform: platformText(leg.from), colour: colourOf(leg), dot: colourOf(leg), ride: leg, index: i, journey: j });
     });
     const last = j.legs[j.legs.length - 1];
     const [name, address] = placeName(last.to, 'to');
     step(steps, { time: last.to, name, address, platform: platformText(last.to), colour: null, dot: colourOf(last), last: true });
 
     const list = el('div', 'legs');
-    steps.forEach((s, n) => list.appendChild(stepRow(s, n === 0)));
+    steps.forEach((s, n) => {
+      const row = stepRow(s, n === 0);
+      if (followed) markProgress(row, s, followed);
+      list.appendChild(row);
+    });
     wrap.appendChild(list);
     return wrap;
   }
@@ -1116,11 +1137,185 @@
 
   // ---------- the map (map.js) ----------
   function drawn() {
+    if (mode === 'route' && followShown && following()) {
+      // the followed connection, with what is behind faded (its key keeps the map where it is on each check)
+      const v = window.follow.view();
+      document.dispatchEvent(new CustomEvent('route-drawn', {
+        detail: { active: true, journey: v.journey, from: v.from, to: v.to, followed: true,
+          done: v.progress.legs.map((l, i) => (l.state === 'done' ? i : -1)).filter(i => i >= 0) },
+      }));
+      return;
+    }
     const journey = mode === 'route' ? journeys.find(j => j.id === openId) || null : null;
     document.dispatchEvent(new CustomEvent('route-drawn', {
       detail: { active: mode === 'route', journey, from: mode === 'route' ? ends.from : null, to: mode === 'route' ? ends.to : null },
     }));
   }
+
+  // ---------- following a connection (follow.js) ----------
+  // "Follow" on an opened connection: from then on it is checked live and shown
+  // in Route mode until the arrival; the app stays usable as before.
+  function followButton(j) {
+    const already = window.follow.id() === j.id;
+    const button = el('button', `follow-button${already ? ' on' : ''}`, already ? '✓ Following' : 'Follow');
+    button.type = 'button';
+    button.title = already ? 'Show the followed connection' : 'Follow this connection: live checks of delays, changes and cancellations';
+    button.onclick = (e) => {
+      e.stopPropagation();
+      if (!already) window.follow.start(j, { from: endInfo(ends.from), to: endInfo(ends.to) });
+      showFollowed();
+    };
+    return button;
+  }
+  // what follow.js keeps of a place: enough to look for connections from or to it and to mark it
+  const endInfo = place => ({ param: param(place), name: place.name, kind: place.kind, id: place.id || null,
+    lat: place.lat, lon: place.lon, address: place.address || null });
+
+  function showFollowed() {
+    if (!following()) return;
+    if (mode !== 'route') setMode('route');
+    followShown = true;
+    folded = true;
+    quiet = false;
+    renderAll();
+    panelBox.scrollTop = 0;
+    document.dispatchEvent(new CustomEvent('route-changed'));
+    if (window.sheet && window.sheet.state() === 'peek') document.dispatchEvent(new CustomEvent('sheet-request', { detail: { state: 'half' } }));
+  }
+
+  // "You are following ... · Show" above a new search's list
+  function followBanner() {
+    const v = window.follow.view();
+    const box = el('button', `follow-banner${v.problem ? ' trouble' : ''}`);
+    box.type = 'button';
+    box.appendChild(el('span', 'follow-banner-what', `${v.problem ? '⚠ ' : ''}Following: ${v.from.name} → ${v.to.name}`));
+    box.appendChild(el('span', 'follow-banner-show', 'Show'));
+    box.onclick = showFollowed;
+    return box;
+  }
+
+  function checkedText(v) {
+    if (v.checkError) return v.checkError;
+    if (v.checkedAt) return `Checked ${clockFormat.format(v.checkedAt)}${germanTimeNote(v.checkedAt)}`;
+    return v.checking ? 'Checking...' : 'Not checked yet';
+  }
+
+  function stateText(v) {
+    if (v.problem) return `⚠ ${v.problem.text}`;
+    if (v.progress.phase === 'arrived') return '✓ Arrived';
+    const changes = v.journey.changesLive.length;
+    return changes ? `✓ All good: ${changes === 1 ? 'the change still works' : 'every change still works'}` : '✓ All good';
+  }
+
+  function renderFollowHead(v) {
+    const title = el('h2', 'route-title');
+    title.appendChild(el('span', '', v.from.name));
+    title.appendChild(el('span', 'route-arrow', ' → '));
+    title.appendChild(el('span', '', v.to.name));
+    head.appendChild(title);
+    // the small bar (phones): what is now or next, and whether something went wrong
+    const peek = el('div', 'route-peek follow-peek');
+    const what = el('div', 'route-peek-what');
+    what.appendChild(el('span', v.problem ? 'follow-peek-text late' : 'follow-peek-text', v.problem ? `⚠ ${v.problem.text}` : window.follow.summary(v)));
+    peek.appendChild(what);
+    head.appendChild(peek);
+    head.appendChild(el('div', v.checkError ? 'route-status late' : 'route-status', `Following · ${checkedText(v)}`));
+  }
+
+  function renderFollow(v) {
+    const card = el('div', `follow-card${v.problem ? ' trouble' : v.progress.phase === 'arrived' ? ' arrived' : ''}`);
+    card.appendChild(el('div', 'follow-state', stateText(v)));
+    if (v.problem && v.problem.detail) card.appendChild(el('div', 'follow-detail', v.problem.detail));
+    card.appendChild(el('div', 'follow-now', window.follow.summary(v)));
+    const top = el('div', 'follow-times');
+    top.appendChild(timesOf(v.journey));
+    top.appendChild(el('span', 'conn-dur', `${duration(v.journey.minutes)} · ${changesText(v.journey.changes)}`));
+    card.appendChild(top);
+    if (v.noLive) card.appendChild(el('div', 'follow-detail', 'Part of this connection starts outside Baden-Württemberg: no live data for that part.'));
+    card.appendChild(el('div', v.checkError ? 'follow-checked late' : 'follow-checked', checkedText(v)));
+    const buttons = el('div', 'conn-actions');
+    const stop = el('button', 'route-close follow-stop', 'Stop following');
+    stop.type = 'button';
+    stop.onclick = () => window.follow.stop();
+    if (state === 'ready' && journeys.length) {
+      const list = el('button', 'route-more follow-list', 'Connections');
+      list.type = 'button';
+      list.title = 'Back to the list of connections (the connection stays followed)';
+      list.onclick = () => { followShown = false; renderAll(); document.dispatchEvent(new CustomEvent('route-changed')); };
+      buttons.appendChild(list);
+    }
+    buttons.appendChild(stop);
+    card.appendChild(buttons);
+    routeBoard.appendChild(card);
+    if (v.problem) routeBoard.appendChild(alternativesBox(v));
+    const opened = el('div', 'conn open follow-conn');
+    opened.appendChild(details(v.journey, v));
+    routeBoard.appendChild(opened);
+  }
+
+  // new connections from where the problem leaves the user, each with "Take it"
+  function alternativesBox(v) {
+    const box = el('div', 'follow-alternatives');
+    const a = v.alternatives;
+    box.appendChild(el('h3', '', `New connections from ${v.problem.from.name}`));
+    if (!a || a.state === 'loading') {
+      const line = el('div', 'notice loading');
+      line.appendChild(el('span', 'spinner'));
+      line.appendChild(el('span', '', 'Looking for new connections...'));
+      box.appendChild(line);
+      return box;
+    }
+    if (a.state !== 'ready') { box.appendChild(el('p', 'follow-detail', a.message)); return box; }
+    a.list.forEach(j => {
+      const row = el('div', 'conn follow-alt');
+      const top = el('div', 'conn-top');
+      top.appendChild(timesOf(j));
+      top.appendChild(el('span', 'conn-dur', `${duration(j.minutes)} · ${changesText(j.changes)}`));
+      row.appendChild(top);
+      row.appendChild(chainOf(j));
+      const take = el('button', 'follow-button take', 'Take it');
+      take.type = 'button';
+      take.onclick = () => { window.follow.take(j); showFollowed(); };
+      row.appendChild(take);
+      box.appendChild(row);
+    });
+    return box;
+  }
+
+  // a step of the followed connection: behind (done), now, or ahead
+  function markProgress(row, s, v) {
+    const legs = v.progress.legs;
+    let state = 'next';
+    if (s.last) state = v.progress.phase === 'arrived' ? 'done' : 'next';
+    else if (s.change !== undefined) {
+      // waiting at the change: the ride before is behind, the next not yet begun
+      const before = legs[s.change - 1], after = legs[s.change];
+      state = after.state !== 'next' ? 'done' : before && before.state === 'done' ? 'now' : 'next';
+    } else if (s.leg !== undefined) {
+      state = legs[s.leg].state;
+      // waiting for this ride (after a walk to its stop): here is where the user is
+      if (state === 'next' && v.progress.phase === 'wait' && v.progress.nextIndex === s.leg) state = 'now';
+    }
+    row.classList.add(`p-${state}`);
+    if (state === 'now') {
+      const what = row.querySelector('.what');
+      const leg = s.leg !== undefined ? v.journey.legs[s.leg] : null;
+      const label = s.change !== undefined ? 'Now: change here' : leg.kind === 'walk' ? 'Now: walking'
+        : legs[s.leg].state === 'now' ? 'Now: on board' : 'Now: wait here';
+      what.insertBefore(el('span', 'follow-here', label), what.firstChild);
+    }
+  }
+
+  document.addEventListener('follow-changed', () => {
+    if (followShown && !following()) followShown = false;
+    if (mode !== 'route') return;
+    const held = holdCards();
+    renderHead();
+    renderBoard();
+    held();
+    fold();
+    drawn();
+  });
 
   // ---------- from elsewhere ----------
   // "Route from here" / "Route to here" on a stop's departures, and the map's popup
@@ -1142,7 +1337,7 @@
     active: () => mode === 'route',
     setMode,
     // the sheet has something to open for (not just the hint)
-    hasContent: () => mode === 'route' && state !== 'idle',
+    hasContent: () => mode === 'route' && (state !== 'idle' || (followShown && following())),
     openId: () => openId,
     close: () => toggle(null),
     // Back while connections are on their way: the search is given up
@@ -1153,6 +1348,8 @@
     folded: () => folded,
     quiet: () => quiet,
     startWith,
+    showFollowed,
+    followShown: () => mode === 'route' && followShown && following(),
     ends: () => ({ from: ends.from, to: ends.to }),
     journeys: () => journeys,
     state: () => state,

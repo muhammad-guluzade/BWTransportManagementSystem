@@ -413,6 +413,8 @@
 
   // where the user is ("My location" in From or To): a blue dot, a pale circle for how exact it is
   function meDot(place) {
+    // (the live position is on the map already: position.js, navigator)
+    if (window.position && window.position.showing()) return;
     if (place.accuracy > 25) {
       L.circle([place.lat, place.lon], { pane: 'route', radius: place.accuracy, color: '#1a73e8', weight: 1, opacity: 0.4,
         fillColor: '#1a73e8', fillOpacity: 0.1, interactive: false }).addTo(routeLayer);
@@ -421,7 +423,7 @@
     if (mark) mark.addTo(routeLayer);
   }
 
-  function drawRoute({ active, journey, from, to }) {
+  function drawRoute({ active, journey, from, to, followed = false, done = [] }) {
     routeLayer.clearLayers();
     const stations = new Set();
     if (active && journey) {
@@ -432,15 +434,17 @@
     if (!active) return;
     const points = [];
     if (journey) {
-      journey.legs.forEach(leg => {
+      journey.legs.forEach((leg, i) => {
+        // (a followed connection: what is behind is pale)
+        const behind = done.includes(i);
         const path = leg.path && leg.path.length > 1 ? leg.path
           : [[leg.from.lat, leg.from.lon], [leg.to.lat, leg.to.lon]].filter(([a, b]) => a !== null && b !== null);
         if (path.length < 2) return;
         points.push(...path);
         const walk = leg.kind === 'walk';
         // a light edge under each line keeps it readable on any map
-        if (!walk) L.polyline(path, { pane: 'route', color: '#fff', weight: 9, opacity: 0.8, interactive: false }).addTo(routeLayer);
-        L.polyline(path, { pane: 'route', color: lineColour(leg), weight: walk ? 4 : 6, opacity: 0.95, dashArray: walk ? '2 8' : null, lineCap: 'round',
+        if (!walk) L.polyline(path, { pane: 'route', color: '#fff', weight: 9, opacity: behind ? 0.4 : 0.8, interactive: false }).addTo(routeLayer);
+        L.polyline(path, { pane: 'route', color: lineColour(leg), weight: walk ? 4 : 6, opacity: behind ? 0.35 : 0.95, dashArray: walk ? '2 8' : null, lineCap: 'round',
           interactive: false }).addTo(routeLayer);
       });
       // where one ride ends and the next begins
@@ -460,7 +464,7 @@
       if (mark) { mark.addTo(routeLayer); points.push([place.lat, place.lon]); }
     });
     // the map moves only when there is a new connection to see
-    const key = journey ? `j:${journey.id}` : '';
+    const key = journey ? `${followed ? 'f' : 'j'}:${journey.id}` : '';
     if (key === routeShown) return;
     routeShown = key;
     if (!journey || !points.length) return;
@@ -473,7 +477,15 @@
     settleTiles();
   }
 
-  document.addEventListener('route-drawn', (e) => drawRoute(e.detail));
+  let lastRoute = null;
+  document.addEventListener('route-drawn', (e) => { lastRoute = e.detail; drawRoute(e.detail); });
+  // the live position appeared (position.js, navigator): the route's own "you are here" dot goes
+  let positionShown = false;
+  document.addEventListener('position-changed', () => {
+    if (positionShown) return;
+    positionShown = true;
+    if (lastRoute && [lastRoute.from, lastRoute.to].some(p => p && p.kind === 'me')) drawRoute(lastRoute);
+  });
   // "My location" found: the map goes there (at street level, in the free part of the screen)
   document.addEventListener('me-located', (e) => {
     const at = L.latLng(e.detail.lat, e.detail.lon);

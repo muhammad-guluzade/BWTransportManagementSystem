@@ -489,6 +489,59 @@ body.route-mode #panel-close { display: none !important; }
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45); }
 .route-end.to span { background: #1d2228; border-color: #fff; box-shadow: 0 0 0 2px #1d2228, 0 1px 4px rgba(0, 0, 0, 0.45); }
 .route-end.me span { background: #1a73e8; border-color: #fff; box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.35), 0 1px 4px rgba(0, 0, 0, 0.45); }
+
+/* following a connection (follow.js, navigator) */
+.follow-card { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line); border-left: 5px solid var(--ok); border-radius: 12px; background: var(--card); }
+.follow-card.trouble { border-left-color: var(--late); background: var(--warn-bg); }
+.follow-card.arrived { border-left-color: var(--faint); }
+.follow-state { font-weight: 700; color: var(--ok); }
+.follow-card.trouble .follow-state { color: var(--late); }
+.follow-card.arrived .follow-state { color: var(--muted); }
+.follow-detail { margin-top: 3px; color: var(--muted); font-size: 0.84rem; }
+.follow-now { margin-top: 6px; font-weight: 600; }
+.follow-times { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.follow-checked { margin-top: 4px; color: var(--faint); font-size: 0.8rem; }
+.follow-checked.late { color: var(--late); }
+.follow-card .conn-actions .route-close { margin-left: auto; }
+.follow-conn .conn-details { border-top: none; }
+.follow-button { flex-shrink: 0; padding: 5px 14px; border: none; border-radius: 15px; background: var(--accent); color: var(--card); font-size: 0.85rem;
+  font-weight: 600; cursor: pointer; }
+.follow-button.on { background: var(--accent-soft); color: var(--accent); }
+.follow-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; margin-top: 12px; padding: 9px 12px;
+  border: 1px solid var(--accent); border-radius: 12px; background: var(--accent-soft); color: var(--text); font: inherit; font-size: 0.88rem; text-align: left; cursor: pointer; }
+.follow-banner.trouble { border-color: var(--late); background: var(--warn-bg); }
+.follow-banner-what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.follow-banner-show { flex-shrink: 0; color: var(--accent); font-weight: 700; }
+.follow-alternatives h3 { margin: 16px 0 0; font-size: 0.95rem; }
+.follow-alt { display: grid; gap: 6px; padding: 10px 12px; }
+.follow-alt .follow-button { justify-self: start; }
+.step.p-done { opacity: 0.5; }
+.step.p-now .dot { box-shadow: 0 0 0 4px var(--accent-soft); }
+.follow-here { justify-self: start; padding: 1px 8px; border-radius: 9px; background: var(--accent); color: var(--card); font-size: 0.75rem; font-weight: 700; }
+.follow-peek-text { color: var(--text); font-size: 0.9rem; font-weight: 600; }
+.follow-peek-text.late { color: var(--late); }
+/* the pop-up when something went wrong, shown in Departures mode */
+#follow-alert { position: fixed; z-index: 2400; top: 78px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px;
+  width: max-content; max-width: calc(100% - 24px); box-sizing: border-box; padding: 9px 8px 9px 14px; border: 1px solid var(--late); border-radius: 14px;
+  background: var(--card); color: var(--late); box-shadow: 0 4px 16px var(--shade); font-size: 0.88rem; font-weight: 600; cursor: pointer; }
+#follow-alert[hidden] { display: none; }
+.follow-alert-close { flex-shrink: 0; width: 30px; height: 30px; padding: 0; border: none; border-radius: 50%; background: none; color: var(--muted); font-size: 15px; cursor: pointer; }
+.follow-alert-close:hover { background: var(--accent-soft); }
+/* where the user is (position.js): a round button under the menu, a blue dot on the map */
+#locate-me { position: absolute; z-index: 1000; top: 58px; right: 12px; width: 38px; height: 38px; padding: 0; border: none; border-radius: 50%;
+  background: var(--card); color: var(--muted); box-shadow: 0 1px 4px var(--shade); cursor: pointer; }
+#locate-me::before { content: ''; display: block; width: 22px; height: 22px; margin: auto; background: currentColor; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='6.5'/%3E%3Ccircle cx='12' cy='12' r='2' fill='black'/%3E%3Cpath d='M12 2v3M12 19v3M2 12h3M19 12h3'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='6.5'/%3E%3Ccircle cx='12' cy='12' r='2' fill='black'/%3E%3Cpath d='M12 2v3M12 19v3M2 12h3M19 12h3'/%3E%3C/svg%3E") center / contain no-repeat; }
+#locate-me:hover, #locate-me.on { color: #1a73e8; }
+#locate-me.stale { color: var(--faint); }
+#locate-me.busy::before { animation: locate-busy 1s ease-in-out infinite; }
+@keyframes locate-busy { 50% { opacity: 0.3; } }
+#position-note { position: absolute; z-index: 1000; top: 104px; right: 12px; max-width: min(320px, calc(100% - 24px)); padding: 8px 12px;
+  border: 1px solid var(--warn-line); border-radius: 10px; background: var(--warn-bg); color: var(--text); font-size: 0.85rem; }
+#position-note[hidden] { display: none; }
+.me-live { background: none; border: none; }
+.me-live span { position: absolute; transform: translate(-50%, -50%); width: 16px; height: 16px; border: 3px solid #fff; border-radius: 50%; background: #1a73e8;
+  box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.35), 0 1px 4px rgba(0, 0, 0, 0.45); }
+.me-live.stale span { background: #8a929c; box-shadow: 0 0 0 2px rgba(138, 146, 156, 0.35), 0 1px 4px rgba(0, 0, 0, 0.45); }
 /* "Route from here / to here" on a stop's departures */
 
 /* ---------- wide screens: search bar on top, map left, panel right ---------- */
@@ -550,6 +603,9 @@ body.route-mode #panel-close { display: none !important; }
   .leaflet-control-zoom { display: none; }
   /* under the top bar, whatever its height (sheet.js sets --top-bottom) */
   #menu-toggle, #favourites-toggle { top: var(--top-bottom, calc(108px + env(safe-area-inset-top, 0px))); }
+  #locate-me { top: calc(var(--top-bottom, calc(108px + env(safe-area-inset-top, 0px))) + 46px); }
+  #position-note { top: calc(var(--top-bottom, calc(108px + env(safe-area-inset-top, 0px))) + 92px); }
+  #follow-alert { top: calc(var(--top-bottom, calc(108px + env(safe-area-inset-top, 0px))) + 48px); left: 12px; right: 58px; transform: none; width: auto; max-width: none; }
   #update-bar { top: calc(var(--top-bottom, calc(108px + env(safe-area-inset-top, 0px))) + 48px); width: max-content; }
   #map-note { top: var(--top-bottom, calc(108px + env(safe-area-inset-top, 0px))); max-width: calc(100% - 120px); left: 12px; transform: none; }
 
