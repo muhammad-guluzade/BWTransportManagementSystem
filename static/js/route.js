@@ -247,8 +247,22 @@
     f.input.setAttribute('aria-expanded', String(f.rows.length > 0));
     if (f.waiting && f.waiting === typed) {
       f.waiting = '';
-      if (f.rows.length) choose(end, f.rows[0], { keys: true });
+      // Enter came before these results: the best of them (nothing found: nothing happens)
+      if (f.rows.length) take(end, bestRow(end, typed));
     }
+  }
+
+  // Enter in a field (the user's rules): the place whose name was typed in full, else the
+  // first one found; in From the cursor goes on to To, in To the connections are searched
+  const plainName = text => text.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ß/g, 'ss').replace(/[^a-z0-9]+/g, ' ').trim();
+  function bestRow(end, typed) {
+    const f = fields[end];
+    const exact = f.rows.findIndex(place => place && plainName(place.name) === plainName(typed));
+    return f.rows[exact >= 0 ? exact : 0];
+  }
+  function take(end, place) {
+    choose(end, place, { keys: true });
+    if (end === 'to') search();
   }
 
   function mark(end, index) {
@@ -297,7 +311,8 @@
       } else if (e.key === 'Enter') {
         e.preventDefault();
         const typed = f.input.value.trim();
-        if (f.marked >= 0 && f.rows[f.marked]) { choose(end, f.rows[f.marked], { keys: true }); return; }
+        // a row marked with the arrow keys
+        if (f.marked >= 0 && f.rows[f.marked]) { take(end, f.rows[f.marked]); return; }
         // the chosen place is in the box as it was: From goes on to To, To asks for the connections
         if (ends[end] && (typed === '' || typed === ends[end].name || ends[end].locating)) {
           closeLists();
@@ -306,7 +321,10 @@
           return;
         }
         if (typed.length < 2) return;
-        if (f.shownFor === typed) { if (f.rows.length) choose(end, f.rows[0], { keys: true }); return; }
+        // the results for this text are there: the one typed in full, else the first
+        // (in To: and the connections); none found: nothing happens
+        if (f.shownFor === typed) { if (f.rows.length) take(end, bestRow(end, typed)); return; }
+        // the list shown is for an earlier text, or none yet: its results are awaited (showFound)
         f.waiting = typed;
         clearTimeout(f.timer);
         find(end, f.input.value.replace(/^\s+/, ''));
@@ -601,7 +619,47 @@
     if (locating()) { searchWanted = true; return; }
     if (!ends.from || !ends.to) { fields[ends.from ? 'to' : 'from'].input.focus(); return; }
     if (document.activeElement && form.contains(document.activeElement)) document.activeElement.blur();   // (phones: the keyboard goes)
-    changed({ plan: true });
+    withFreshLocation(() => changed({ plan: true }));
+  }
+
+  // "My location" in From or To (the user's rule): every new search asks where the
+  // user is NOW, not where they were when it was chosen. The live position of the
+  // round button (position.js) is used when it is fresh; else the device is asked
+  // (the field says "Finding your location..." meanwhile). Not found: the search
+  // still runs, with the earlier position, and the status line says so.
+  const FRESH_POSITION_MS = 15000;
+  let earlierLocation = false;   // the last search had to use an earlier position
+  function withFreshLocation(then) {
+    // (asked already: when it answers, the search runs with what is chosen then, e.g. a new time)
+    if (['from', 'to'].some(end => ends[end] && ends[end].refreshing)) return;
+    earlierLocation = false;
+    const mine = ['from', 'to'].filter(end => ends[end] && ends[end].kind === 'me' && !ends[end].locating && ends[end].lat !== null);
+    if (!mine.length) { then(); return; }
+    const live = window.position && window.position.last();
+    if (live && Date.now() - live.at < FRESH_POSITION_MS) {
+      mine.forEach(end => Object.assign(ends[end], { lat: live.lat, lon: live.lon, accuracy: live.accuracy }));
+      then();
+      return;
+    }
+    const asked = mine.map(end => ends[end]);
+    asked.forEach(place => { place.locating = true; place.refreshing = true; });
+    mine.forEach(end => showField(end));
+    // the old list goes; the board says "Finding your location..." until the device answers
+    changed();
+    const done = (position) => {
+      asked.forEach(place => {
+        place.refreshing = place.locating = false;
+        if (position) Object.assign(place, { lat: position.coords.latitude, lon: position.coords.longitude, accuracy: position.coords.accuracy });
+      });
+      showField('from');
+      showField('to');
+      // (From and To swapped, or another place chosen, meanwhile: no search by itself)
+      if (!asked.every((place, i) => ends[mine[i]] === place)) { renderAll(); return; }
+      searchWanted = false;
+      earlierLocation = !position;
+      then();
+    };
+    navigator.geolocation.getCurrentPosition(done, () => done(null), { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 });
   }
   goButton.addEventListener('click', search);
 
@@ -669,7 +727,7 @@
     time.value = tools.clamp(tools.add(base, direction === 'later' ? STEP_HOURS : -STEP_HOURS));
     time.arrive = time.arrive && Boolean(time.value);
     drawChip();
-    changed({ plan: true });
+    withFreshLocation(() => changed({ plan: true }));
   }
 
   // the list is asked again now and then while it is looked at
@@ -760,7 +818,8 @@
     if (state === 'error' || state === 'problem') return problem.message;
     const now = new Date(updatedAt);
     const count = journeys.length === 1 ? '1 connection' : `${journeys.length} connections`;
-    return updateProblem ? `${count} · Could not update: ${updateProblem}` : `${count} · Updated ${clockFormat.format(now)}${germanTimeNote(now)}`;
+    const earlier = earlierLocation ? ' · Your location could not be updated: the earlier one was used' : '';
+    return updateProblem ? `${count} · Could not update: ${updateProblem}` : `${count} · Updated ${clockFormat.format(now)}${germanTimeNote(now)}${earlier}`;
   }
 
   // (the panel's Route part is filled only in Route mode: hidden content would still be in the page)
