@@ -522,10 +522,10 @@ body.route-mode #panel-close { display: none !important; }
   /* the two modes (the user's choice 2A): no switch; a route icon in the search box, and in Route
      mode a "‹" beside the form goes back. In Route mode the bar is a card with the form. */
   #mode-switch { display: none; }
-  #stop-input { padding-right: 76px; }
+  body.has-navigator #stop-input { padding-right: 76px; }   /* (navigator: room for its icon) */
   #route-open { display: block; position: absolute; right: 6px; top: 50%; transform: translateY(-50%); width: 34px; height: 34px; padding: 0;
     border: none; border-radius: 50%; background: var(--accent-soft); color: var(--accent); cursor: pointer; }
-  #search-clear { right: 42px; }
+  body.has-navigator #search-clear { right: 42px; }
   body.route-mode #top { background: var(--card); box-shadow: 0 2px 10px var(--shade); pointer-events: auto; }
   #route-form:not([hidden]) { display: grid; grid-template-columns: 30px minmax(0, 1fr); column-gap: 6px; row-gap: 8px; }
   #route-form > * { grid-column: 2; }

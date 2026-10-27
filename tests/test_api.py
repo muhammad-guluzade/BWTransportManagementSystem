@@ -5,6 +5,7 @@ app) depends on these field names, so a failing test here means the API
 changed in a way that would break it. EFA is replaced by canned responses,
 so the tests need no network."""
 import math
+import os
 import unittest
 
 from datetime import datetime, timezone
@@ -1114,6 +1115,75 @@ class ErrorTest(ApiTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NavigatorSwitchTest(unittest.TestCase):
+    """The navigator (step 2) as a whole can be switched off (BW_NAVIGATOR=off):
+    the site is then the departures app alone, as before the navigator: no Route
+    mode on the page, its API answers "not found", the stop search knows no
+    places. On, everything of it is there."""
+
+    NAVIGATOR_PARTS = ('id="mode-switch"', 'id="route-open"', 'id="route-form"', 'id="route-head"', 'id="route-board"',
+                       'id="route-when-window"', 'id="location-help"', "js/route.js", "js/locationhelp.js", "has-navigator")
+
+    def setUp(self):
+        self.http = app.test_client()
+        self.was = app.config["NAVIGATOR"]
+
+    def tearDown(self):
+        app.config["NAVIGATOR"] = self.was
+
+    def test_on(self):
+        app.config["NAVIGATOR"] = True
+        page = self.http.get("/").get_data(as_text=True)
+        for part in self.NAVIGATOR_PARTS:
+            self.assertIn(part, page)
+        body = self.http.get("/api/v1/").get_json()
+        self.assertIn("journeys", body["endpoints"])
+        self.assertIn("&places=", body["endpoints"]["search_stops"])
+        self.assertEqual(self.http.get("/api/v1/journeys").status_code, 400)          # there: says what is missing
+
+    def test_off_is_the_departures_app_alone(self):
+        app.config["NAVIGATOR"] = False
+        page = self.http.get("/").get_data(as_text=True)
+        for part in self.NAVIGATOR_PARTS:
+            self.assertNotIn(part, page, part)
+        for name in ("js/departures.js", "js/map.js", "js/sheet.js", "js/address.js", "js/when.js", "js/favourites.js", 'id="stop-input"'):
+            self.assertIn(name, page)
+        body = self.http.get("/api/v1/").get_json()
+        self.assertEqual(set(body["endpoints"]), {"search_stops", "stops_in_area", "departures", "platform_departures", "departure_stops"})
+        self.assertEqual(body["endpoints"]["search_stops"], "/api/v1/stops/search?q={text}&near={lat},{lon}&radius={km}&limit={n}")
+        # as if it had never existed: the same "not found" as any unknown address
+        self.assertEqual(self.http.get("/api/v1/journeys?from=de:08111:115&to=de:08421:1008").status_code, 404)
+        self.assertEqual(self.http.get("/api/v1/journeys").data, self.http.get("/api/v1/no-such-thing").data)
+
+    def test_off_search_knows_no_places(self):
+        real = client.find_stops
+        client.find_stops = lambda query: {"stopFinder": {"points": [
+            {"anyType": "street", "name": "Ulm, Hauptstraße", "quality": "900", "ref": {"omc": "8421000", "coords": "9.98,48.40"}}]}}
+        try:
+            app.config["NAVIGATOR"] = False
+            res = self.http.get("/api/v1/stops/search?q=Hauptstrasse&places=1")
+            self.assertIn(res.status_code, (200, 502))
+            if res.status_code == 200:
+                self.assertEqual(set(res.get_json()), {"stops"})
+            app.config["NAVIGATOR"] = True
+            self.assertIn("places", self.http.get("/api/v1/stops/search?q=Hauptstrasse&places=1").get_json())
+        finally:
+            client.find_stops = real
+
+    def test_the_setting(self):
+        import app as app_module
+        was = os.environ.get("BW_NAVIGATOR")
+        try:
+            for value, wanted in (("off", False), ("OFF", False), ("0", False), ("false", False), ("on", True), ("1", True)):
+                os.environ["BW_NAVIGATOR"] = value
+                self.assertEqual(app_module.navigator_wanted(), wanted, value)
+        finally:
+            if was is None:
+                os.environ.pop("BW_NAVIGATOR", None)
+            else:
+                os.environ["BW_NAVIGATOR"] = was
 
 
 class PageTest(unittest.TestCase):

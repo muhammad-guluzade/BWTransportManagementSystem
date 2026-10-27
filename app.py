@@ -14,6 +14,7 @@ import gzip
 import os
 import threading
 import time
+from pathlib import Path
 
 from flask import Flask, Response, jsonify, render_template, request, send_from_directory
 
@@ -39,7 +40,29 @@ app = App(__name__)
 app.json.sort_keys = False  # keep fields in the order the API documents them
 # a changed page template is used at once, also by a server that keeps running
 app.config["TEMPLATES_AUTO_RELOAD"] = True
+
+
+def navigator_wanted() -> bool:
+    """The navigator (step 2) is on unless BW_NAVIGATOR says off, in the
+    environment or in .env (serve.py reads the same file)."""
+    value = os.environ.get("BW_NAVIGATOR")
+    if value is None:
+        from serve import read_env_file
+        value = read_env_file(Path(__file__).parent / ".env").get("BW_NAVIGATOR", "on")
+    return value.strip().lower() not in ("off", "0", "no", "false")
+
+
+# navigator: switched on or off as a whole (off: the departures app alone)
+app.config["NAVIGATOR"] = navigator_wanted()
+from api import navigator  # noqa: E402  (navigator)
+navigator.register(v1.bp)  # (navigator)
 app.register_blueprint(v1.bp)
+
+
+@app.context_processor
+def page_parts():
+    """What the page template needs to know: is the navigator on? (navigator)"""
+    return {"navigator": app.config.get("NAVIGATOR", False)}
 
 
 @app.url_defaults

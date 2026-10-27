@@ -16,7 +16,7 @@ from api import limits
 from efa.client import EfaError
 from efa.localtime import from_local
 from gtfs.store import StopsNotImported
-from services import departures, journeys, stops
+from services import departures, stops
 
 bp = Blueprint("api_v1", __name__, url_prefix="/api/v1")
 # how often one visitor may ask (api/limits.py); switched off with the app
@@ -97,30 +97,36 @@ def chosen_time(text: str) -> datetime | None:
     return moment.astimezone(timezone.utc).replace(second=0, microsecond=0)
 
 
-@bp.errorhandler(journeys.InvalidPlace)
-def invalid_place(exc):
-    return error(400, "invalid_parameter", str(exc))
-
-
 @bp.errorhandler(StopsNotImported)
 def stops_not_imported(exc):
     return error(503, "stops_not_imported",
                  "The stop database is missing or was built by an older version. Run: python import_stops.py")
 
 
+# Hooks for parts that can be switched off or removed (the navigator: api/navigator.py
+# adds to these): more endpoints for the index [(name, address, shown_now)], and
+# the stop search with places (None: there is none)
+endpoint_list = []
+place_search = None
+
+
 @bp.route("/")
 def index():
+    endpoints = {
+        "search_stops": "/api/v1/stops/search?q={text}&near={lat},{lon}&radius={km}&limit={n}",
+        "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}&platforms={0|1}",
+        "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}",
+        "platform_departures": "/api/v1/stops/{stop_id}/departures?platform={platform_id}",
+        "departure_stops": "/api/v1/stops/{stop_id}/departures/{departure_id}/stops",
+    }
+    extra = {name: address for name, address, shown in endpoint_list if shown()}
+    if place_search is not None and extra:
+        endpoints["search_stops"] += "&places={0|1}"   # (the navigator's places, while it is on)
+    endpoints.update(extra)
     return jsonify({
         "name": "BW Departures API",
         "version": 1,
-        "endpoints": {
-            "search_stops": "/api/v1/stops/search?q={text}&near={lat},{lon}&radius={km}&limit={n}&places={0|1}",
-            "stops_in_area": "/api/v1/stops?bbox={west},{south},{east},{north}&limit={n}&spread={0|1}&platforms={0|1}",
-            "departures": "/api/v1/stops/{stop_id}/departures?tab={tab_id}",
-            "platform_departures": "/api/v1/stops/{stop_id}/departures?platform={platform_id}",
-            "departure_stops": "/api/v1/stops/{stop_id}/departures/{departure_id}/stops",
-            "journeys": "/api/v1/journeys?from={stop_id|lat,lon}&to={stop_id|lat,lon}&when={time}&arrive={0|1}&dticket={0|1}",
-        },
+        "endpoints": endpoints,
         # null until the stop database has been built (python import_stops.py)
         "stop_data": stops.data_info(),
     })
@@ -135,9 +141,11 @@ def stops_in_area():
 @bp.route("/stops/search")
 def search_stops():
     args = (request.args.get("q", ""), request.args.get("near", ""), request.args.get("radius", ""), request.args.get("limit", ""))
-    if flag("places"):
+    if flag("places") and place_search:
         # the navigator: sights, addresses and streets too, ranked with the stops
-        return jsonify(stops.route_search(*args))
+        found = place_search(*args)
+        if found is not None:
+            return jsonify(found)
     return jsonify({"stops": stops.search(*args)})
 
 
@@ -157,8 +165,4 @@ def flag(name: str) -> bool:
     return request.args.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
-@bp.route("/journeys")
-def plan_journeys():
-    return jsonify(journeys.plan(request.args.get("from", ""), request.args.get("to", ""),
-                                 start=chosen_time(request.args.get("when", "")), arrive=flag("arrive"), dticket=flag("dticket")))
 

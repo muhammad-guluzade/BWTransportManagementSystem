@@ -58,6 +58,10 @@ def settings() -> dict:
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     config = settings()
+    # the navigator's switch (app.py reads it from the environment, or from .env itself)
+    found = {**read_env_file(HERE / ".env"), **os.environ}
+    if "BW_NAVIGATOR" in found:
+        os.environ["BW_NAVIGATOR"] = found["BW_NAVIGATOR"]
     from app import app   # after the logging is set up
     options = {"host": config["host"], "port": config["port"], "threads": config["threads"],
                "ident": "",                      # don't name the server program in the answers
