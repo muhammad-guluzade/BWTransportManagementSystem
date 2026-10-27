@@ -32,6 +32,14 @@ Log in: `ssh -i ~/.ssh/bw_strato root@<server address>`
 | `systemctl start bw-stops-import` | new stop data now (otherwise Wednesday night) |
 | `tail /srv/bw/update.log` | every update and rollback |
 
+**The navigator (Route mode) on or off.** It is on unless the app's settings say
+otherwise. To switch it off (the site is then the departures app alone; its
+addresses answer "not found"): add the line `BW_NAVIGATOR=off` to
+`/srv/bw/app/.env`, then `systemctl restart bw-departures`. To switch it on
+again: remove the line (or write `BW_NAVIGATOR=on`) and restart. Its code
+stays in place either way; to remove the code too, go back to the git tag
+`checkpoint-before-navigator` (`navigator-done` marks where it ends).
+
 When a file in this folder changes, after `bw-update` copy it to its place:
 `install -m 755 /srv/bw/app/deploy/bw-update /usr/local/bin/`, or for a service
 file `cp /srv/bw/app/deploy/<file> /etc/systemd/system/ && systemctl daemon-reload`,
