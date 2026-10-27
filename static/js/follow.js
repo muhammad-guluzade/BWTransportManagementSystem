@@ -158,7 +158,8 @@
     const t = now();
     for (let i = 0; i < j.legs.length; i++) {
       const leg = j.legs[i];
-      if (leg.kind !== 'ride' || prog.legs[i].state === 'done') continue;
+      // (a cancelled ride stays a problem after its time: the user cannot have been on it)
+      if (leg.kind !== 'ride') continue;
       if (leg.from.cancelled || leg.to.cancelled) {
         // from where the user will be: the start (the first ride, reached on foot from it), else the stop the ride leaves from
         const fromStart = i === firstRideIndex(j) && j.legs[0].kind === 'walk' && t < ms(j.legs[0].to.time || j.legs[0].to.planned);
@@ -170,8 +171,8 @@
     }
     for (const change of j.changesLive || []) {
       const a = j.legs[change.from], b = j.legs[change.to];
-      // only a change still ahead (once the next ride has left, the user is on it or not: nothing to say)
-      if (!change.missed || ms(b.from.time) < t - 60000) continue;
+      // (stays a problem after the next ride has left: the user is not on it; new connections from where they are)
+      if (!change.missed) continue;
       return { kind: 'missed', leg: change.to, text: `The ${b.line} at ${formatTime(b.from.time)} can no longer be reached`,
         detail: `${a.line} arrives at ${formatTime(a.to.time)}${a.to.delay >= 1 ? ` (${a.to.delay} min late)` : ''}`,
         from: { param: stopParam(a.to), name: a.to.name, id: a.to.id, lat: a.to.lat, lon: a.to.lon }, when: germanText(Math.max(t, ms(a.to.time))),

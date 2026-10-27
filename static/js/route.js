@@ -673,10 +673,12 @@
 
   // the list is asked again now and then while it is looked at
   setInterval(() => {
-    if (mode === 'route' && state === 'ready' && !document.hidden) load(true);
+    // (not while the followed connection is shown instead: follow.js checks that one)
+    if (mode === 'route' && state === 'ready' && !document.hidden && !(followShown && following())) load(true);
   }, REFRESH_MS);
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && mode === 'route' && state === 'ready' && updatedAt && Date.now() - updatedAt > STALE_MS) load(true);
+    if (!document.hidden && mode === 'route' && state === 'ready' && !(followShown && following())
+      && updatedAt && Date.now() - updatedAt > STALE_MS) load(true);
   });
 
   // ---------- drawing the panel ----------
@@ -1180,7 +1182,8 @@
     renderAll();
     panelBox.scrollTop = 0;
     document.dispatchEvent(new CustomEvent('route-changed'));
-    if (window.sheet && window.sheet.state() === 'peek') document.dispatchEvent(new CustomEvent('sheet-request', { detail: { state: 'half' } }));
+    // the list up: half in the Sheet layout (full stays full), the list screen in Two screens
+    if (window.sheet && window.sheet.state()) document.dispatchEvent(new CustomEvent('sheet-request', { detail: { state: 'list' } }));
   }
 
   // "You are following ... · Show" above a new search's list
@@ -1241,7 +1244,13 @@
       const list = el('button', 'route-more follow-list', 'Connections');
       list.type = 'button';
       list.title = 'Back to the list of connections (the connection stays followed)';
-      list.onclick = () => { followShown = false; renderAll(); document.dispatchEvent(new CustomEvent('route-changed')); };
+      list.onclick = () => {
+        followShown = false;
+        renderAll();
+        document.dispatchEvent(new CustomEvent('route-changed'));
+        // (not refreshed while away: asked again when it is old)
+        if (updatedAt && Date.now() - updatedAt > STALE_MS) load(true);
+      };
       buttons.appendChild(list);
     }
     buttons.appendChild(stop);
