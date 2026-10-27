@@ -10,6 +10,8 @@ from gtfs import store
 from services import departures, journeys
 
 app.config["RATE_LIMIT"] = False
+# the navigator's tests expect it on, whatever BW_NAVIGATOR says (NavigatorSwitchTest tests "off")
+app.config["NAVIGATOR"] = True
 
 PRAG = "de:08111:115"
 ULM = "de:08421:1008"

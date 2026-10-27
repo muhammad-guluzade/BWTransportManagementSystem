@@ -521,7 +521,7 @@ body.route-mode #panel-close { display: none !important; }
 .follow-peek-text { color: var(--text); font-size: 0.9rem; font-weight: 600; }
 .follow-peek-text.late { color: var(--late); }
 /* the pop-up when something went wrong, shown in Departures mode */
-#follow-alert { position: fixed; z-index: 2400; top: 78px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px;
+#follow-alert { position: fixed; z-index: 2400; top: 78px; left: 68px; display: flex; align-items: center; gap: 10px;
   width: max-content; max-width: calc(100% - 24px); box-sizing: border-box; padding: 9px 8px 9px 14px; border: 1px solid var(--late); border-radius: 14px;
   background: var(--card); color: var(--late); box-shadow: 0 4px 16px var(--shade); font-size: 0.88rem; font-weight: 600; cursor: pointer; }
 #follow-alert[hidden] { display: none; }

@@ -18,6 +18,8 @@ from services import departures, stops
 # these tests ask the API many times in a row; the limit itself is tested in
 # test_api.RateLimitTest
 app.config["RATE_LIMIT"] = False
+# the navigator's tests expect it on, whatever BW_NAVIGATOR says (NavigatorSwitchTest tests "off")
+app.config["NAVIGATOR"] = True
 
 STOP = "de:08111:6115"
 NEIGHBOUR = "de:08111:6118"

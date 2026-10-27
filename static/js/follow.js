@@ -346,10 +346,24 @@
   // When something new goes wrong while the user looks at departures: a small
   // note at the top; closed with its x, or tapped to see the connection.
   const alertBox = document.getElementById('follow-alert');
+  const wideScreen = window.matchMedia('(min-width: 1024px)');
+  // Wide screens: at the top of the map, between its zoom buttons and its round buttons
+  // (never over them). Phones: style.css (under the search, beside the round buttons).
+  function placeAlert() {
+    if (!alertBox) return;
+    const map = document.getElementById('map-area');
+    if (!wideScreen.matches || !map) { alertBox.style.top = alertBox.style.left = alertBox.style.maxWidth = ''; return; }
+    const r = map.getBoundingClientRect();
+    alertBox.style.top = `${Math.round(r.top + 12)}px`;
+    alertBox.style.left = `${Math.round(r.left + 56)}px`;
+    alertBox.style.maxWidth = `${Math.max(160, Math.round(r.width - 56 - 112))}px`;
+  }
+  window.addEventListener('resize', () => { if (alertBox && !alertBox.hidden) placeAlert(); });
   function showAlert(text) {
     if (!alertBox) return;
     alertBox.querySelector('.follow-alert-text').textContent = text;
     alertBox.hidden = false;
+    placeAlert();
   }
   function hideAlert() { if (alertBox) alertBox.hidden = true; }
   if (alertBox) {
