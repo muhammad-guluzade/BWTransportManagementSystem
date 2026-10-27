@@ -582,6 +582,7 @@
     problem = null;
     state = 'idle';
     followShown = false;
+    askingToReplace = null;
     if ((plan || (again && listed)) && ready()) {
       if (samePlace(ends.from, ends.to)) { state = 'problem'; problem = { message: 'Start and destination are the same.', retry: false }; }
       else {
@@ -961,6 +962,7 @@
   // opens a connection (null: closes it); the map draws its route
   function toggle(id, { auto = false } = {}) {
     openId = id;
+    askingToReplace = null;
     quiet = false;
     openStops.clear();
     openNotices.clear();
@@ -1157,13 +1159,42 @@
   // ---------- following a connection (follow.js) ----------
   // "Follow" on an opened connection: from then on it is checked live and shown
   // in Route mode until the arrival; the app stays usable as before.
+  // Another connection followed already: asked first (the user's rule), in the
+  // connection's own buttons; kept across the page's redraws until answered
+  let askingToReplace = null;   // the id of the connection asked about
   function followButton(j) {
     const already = window.follow.id() === j.id;
+    if (!already && askingToReplace === j.id && window.follow.active()) {
+      const v = window.follow.view();
+      const box = el('div', 'follow-replace');
+      box.appendChild(el('span', 'follow-replace-text', `You are following ${v.from.name} → ${v.to.name}. Follow this one instead?`));
+      const yes = el('button', 'follow-button', 'Follow instead');
+      yes.type = 'button';
+      yes.onclick = (e) => {
+        e.stopPropagation();
+        askingToReplace = null;
+        window.follow.start(j, { from: endInfo(ends.from), to: endInfo(ends.to) });
+        showFollowed();
+      };
+      const no = el('button', 'route-close follow-replace-cancel', 'Cancel');
+      no.type = 'button';
+      no.onclick = (e) => { e.stopPropagation(); askingToReplace = null; renderBoard(); };
+      box.appendChild(yes);
+      box.appendChild(no);
+      return box;
+    }
     const button = el('button', `follow-button${already ? ' on' : ''}`, already ? '✓ Following' : 'Follow');
     button.type = 'button';
     button.title = already ? 'Show the followed connection' : 'Follow this connection: live checks of delays, changes and cancellations';
     button.onclick = (e) => {
       e.stopPropagation();
+      if (!already && window.follow.active()) {
+        askingToReplace = j.id;
+        const held = holdCards();
+        renderBoard();
+        held();
+        return;
+      }
       if (!already) window.follow.start(j, { from: endInfo(ends.from), to: endInfo(ends.to) });
       showFollowed();
     };

@@ -15,6 +15,7 @@ visitor ── https ──▶ Caddy (certificate, http → https) ──▶ the
 | `Caddyfile` | `/etc/caddy/Caddyfile` | https for the site's name, everything passed to the app; waits for the app during an update instead of showing an error; no server names in answers; browsers use https only (a year) |
 | `bw-departures.service` | `/etc/systemd/system/` | runs the app (`serve.py`) as user `bw`, starts it at boot, restarts it if it stops; it may write only its stop data |
 | `bw-stops-import.service`, `.timer` | `/etc/systemd/system/` | rebuilds the stop data from NVBW every Wednesday about 04:00 (keeps the old data if the download fails) |
+| `bw-selfcheck.service`, `.timer` | `/etc/systemd/system/` | the site checks itself every hour from 03:40 to 23:40 (`selfcheck.py`, see "Watchers" below) |
 | `bw-update` | `/usr/local/bin/bw-update` | the update command, see below |
 | `52bw-reboot` | `/etc/apt/apt.conf.d/` | the automatic security updates may restart the server at 04:30 when an update needs it |
 | `../.env.example` | `/srv/bw/app/.env` | the app's server settings |
@@ -31,6 +32,8 @@ Log in: `ssh -i ~/.ssh/bw_strato root@<server address>`
 | `journalctl -u bw-departures -n 50` | the app's last log lines |
 | `systemctl start bw-stops-import` | new stop data now (otherwise Wednesday night) |
 | `tail /srv/bw/update.log` | every update and rollback |
+| `sudo -u bw /srv/bw/venv/bin/python /srv/bw/app/selfcheck.py` | the self-check now, with its full report |
+| `journalctl -u bw-selfcheck -n 30` | what the hourly self-checks found |
 
 **The navigator (Route mode) on or off.** It is on unless the app's settings say
 otherwise. To switch it off (the site is then the departures app alone; its
@@ -76,10 +79,10 @@ sudo -u bw /srv/bw/venv/bin/python import_stops.py      # about a minute
 **3. Services, update command, night restarts**
 ```bash
 cd /srv/bw/app/deploy
-cp bw-departures.service bw-stops-import.service bw-stops-import.timer /etc/systemd/system/
+cp bw-departures.service bw-stops-import.service bw-stops-import.timer bw-selfcheck.service bw-selfcheck.timer /etc/systemd/system/
 install -m 755 bw-update /usr/local/bin/
 cp 52bw-reboot /etc/apt/apt.conf.d/
-systemctl daemon-reload && systemctl enable --now bw-departures bw-stops-import.timer
+systemctl daemon-reload && systemctl enable --now bw-departures bw-stops-import.timer bw-selfcheck.timer
 bw-update status                                        # Site: answers
 ```
 
@@ -97,6 +100,27 @@ journalctl -u caddy -n 30 --no-pager | grep -i "certificate obtained"
 
 **5. Check from outside**: the site opens with https and the map shows; `http://`
 goes on to `https://`; `/api/v1/` answers.
+
+## Watchers: who notices when something is wrong
+
+A server cannot report that it is down, so two free outside services watch it
+and send an e-mail:
+
+- **UptimeRobot** (pull): every 5 minutes it opens the site and an API
+  address from outside and checks that the expected words come back. It
+  notices: server off, app crashed, Caddy or the certificate broken, the
+  DuckDNS name gone.
+- **Healthchecks.io** (push, a "heartbeat"): `selfcheck.py` runs on the server
+  every hour (bw-selfcheck.timer) and calls the check's secret ping address
+  (`BW_HEALTHCHECK_URL` in `.env`): "all well", or `/fail` with its report.
+  When a call says /fail, or the calls stop coming, Healthchecks.io sends an
+  e-mail. The self-check looks deeper than a visitor can: the stop data and
+  its weekly import, departures now, tomorrow and in a week at three big
+  stations (the December timetable change shows up a day ahead), a
+  connection tomorrow, the certificate's days left, free disk.
+
+The schedule of the Healthchecks.io check: cron `40 3-23 * * *`, time zone
+Europe/Berlin, grace time 30 minutes.
 
 ## Tests
 

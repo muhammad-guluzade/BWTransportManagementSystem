@@ -1,0 +1,10 @@
+[Unit]
+Description=BW Departures: self-check every hour (not in the timetable service's night gaps, 00:40-02:40)
+
+[Timer]
+OnCalendar=*-*-* 03..23:40:00
+RandomizedDelaySec=2min
+Persistent=false
+
+[Install]
+WantedBy=timers.target

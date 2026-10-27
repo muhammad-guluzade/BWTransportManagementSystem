@@ -14,11 +14,11 @@
 <link rel="icon" href="{{ url_for('static', filename='icons/favicon-32.png') }}" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="{{ url_for('static', filename='icons/apple-touch-icon.png') }}">
 <!-- the theme chosen in the menu (menu.js), applied before anything is drawn; none chosen: the device's -->
-<script>
-  try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) { /* no storage: the device's theme */ }
-</script>
+<script src="{{ url_for('static', filename='js/theme.js') }}"></script>
 <!-- Leaflet draws the map (its stylesheet is required for it to render correctly) -->
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<!-- (integrity: the browser takes the file only if it is exactly Leaflet 1.9.4) -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body{% if navigator %} class="has-navigator"{% endif %}>
@@ -246,7 +246,8 @@
   </div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script src="{{ url_for('static', filename='js/menu.js') }}"></script>
 <script src="{{ url_for('static', filename='js/update.js') }}"></script>
 <script src="{{ url_for('static', filename='js/mine.js') }}"></script>

@@ -507,6 +507,11 @@ body.route-mode #panel-close { display: none !important; }
 .follow-button { flex-shrink: 0; padding: 5px 14px; border: none; border-radius: 15px; background: var(--accent); color: var(--card); font-size: 0.85rem;
   font-weight: 600; cursor: pointer; }
 .follow-button.on { background: var(--accent-soft); color: var(--accent); }
+/* "Follow this one instead?" when another connection is followed */
+.follow-replace { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-basis: 100%; order: -1; padding: 8px 10px;
+  border: 1px solid var(--warn-line); border-radius: 10px; background: var(--warn-bg); font-size: 0.85rem; }
+.follow-replace-text { flex-basis: 100%; }
+.conn-actions .follow-replace .route-close { margin-left: 0; }
 .follow-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; margin-top: 12px; padding: 9px 12px;
   border: 1px solid var(--accent); border-radius: 12px; background: var(--accent-soft); color: var(--text); font: inherit; font-size: 0.88rem; text-align: left; cursor: pointer; }
 .follow-banner.trouble { border-color: var(--late); background: var(--warn-bg); }

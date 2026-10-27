@@ -409,18 +409,20 @@
     const { journey: j, progress: p } = v;
     const t = now();
     const minutesTo = time => Math.max(0, Math.round((ms(time) - t) / 60000));
+    // "in 5 min", or "now" within the minute (the user: not "in 0 min")
+    const inMinutes = time => (minutesTo(time) === 0 ? 'now' : `in ${minutesTo(time)} min`);
     if (p.phase === 'arrived') return `Arrived at ${v.to.name}`;
     if (p.phase === 'before') {
       const first = j.legs[0];
       const ride = j.legs.find(l => l.kind === 'ride');
-      if (first.kind === 'walk') return `Start walking in ${minutesTo(first.from.time)} min (${formatTime(first.from.time)}) to ${first.to.name}`;
-      return `${ride.line} leaves in ${minutesTo(ride.from.time)} min (${formatTime(ride.from.time)}${ride.from.platform && ride.from.platform.code ? `, ${ride.from.platform.name.toLowerCase()}` : ''})`;
+      if (first.kind === 'walk') return `Start walking ${inMinutes(first.from.time)} (${formatTime(first.from.time)}) to ${first.to.name}`;
+      return `${ride.line} leaves ${inMinutes(ride.from.time)} (${formatTime(ride.from.time)}${ride.from.platform && ride.from.platform.code ? `, ${ride.from.platform.name.toLowerCase()}` : ''})`;
     }
     const leg = j.legs[p.nowIndex >= 0 ? p.nowIndex : p.nextIndex];
     if (p.phase === 'ride') return `Now: ${leg.line} to ${leg.to.name}, off at ${formatTime(leg.to.time)}`;
     if (p.phase === 'walk') return `Now: walk to ${leg.to.kind === 'place' ? v.to.name : leg.to.name}, ${leg.minutes} min`;
     // waiting at a change
-    return `Next: ${leg.line} at ${formatTime(leg.from.time)}${leg.from.platform && leg.from.platform.code ? `, ${leg.from.platform.name.toLowerCase()}` : ''} (in ${minutesTo(leg.from.time)} min)`;
+    return `Next: ${leg.line} at ${formatTime(leg.from.time)}${leg.from.platform && leg.from.platform.code ? `, ${leg.from.platform.name.toLowerCase()}` : ''} (${inMinutes(leg.from.time)})`;
   }
 
   // ---------- on load: a connection followed before ----------

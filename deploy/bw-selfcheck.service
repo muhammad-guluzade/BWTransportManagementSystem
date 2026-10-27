@@ -1,0 +1,18 @@
+[Unit]
+Description=BW Departures: the site checks itself and tells the watcher (selfcheck.py)
+After=network-online.target bw-departures.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=bw
+Group=bw
+WorkingDirectory=/srv/bw/app
+ExecStart=/srv/bw/venv/bin/python selfcheck.py --quiet
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+Nice=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# it only reads: the app's settings (.env) and the disk's free space

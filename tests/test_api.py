@@ -1350,6 +1350,22 @@ class PublicServerTest(ApiTestCase):
         self.assertEqual(robots.mimetype, "text/plain")
         self.assertEqual(robots.get_data(as_text=True).splitlines(), ["User-agent: *", "Allow: /", "Disallow: /api/"])
 
+    def test_content_security_policy_on_the_pages(self):
+        import re
+        for address in ("/", f"/stop/{STOP}"):
+            page = self.http.get(address)
+            policy = page.headers.get("Content-Security-Policy", "")
+            self.assertIn("default-src 'self'", policy, address)
+            self.assertIn("script-src 'self' https://unpkg.com", policy, address)
+            self.assertNotIn("unsafe-inline", policy, address)
+            self.assertIn("frame-ancestors 'self'", policy, address)
+            # the policy runs no script written into the page: the page has none
+            html = page.get_data(as_text=True)
+            self.assertEqual(re.findall(r"<script(?![^>]*\ssrc=)[^>]*>", html), [], address)
+            self.assertNotRegex(html, r"\son[a-z]+\s*=", address)
+        # data answers are no pages
+        self.assertNotIn("Content-Security-Policy", self.http.get(f"/api/v1/stops/{STOP}/departures").headers)
+
     def test_server_settings(self):
         import os
         import tempfile

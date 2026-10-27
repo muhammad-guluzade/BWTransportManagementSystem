@@ -1,0 +1,25 @@
+# Automatic tests on GitHub (GitHub Actions): on every push and pull request,
+# GitHub's own machines install the app's libraries and run the unit tests,
+# with the Python of the laptop (3.11) and of the server (3.12). The unit
+# tests need neither the internet nor the stop database, so they run here as
+# they do anywhere. The result is the green tick or red cross next to each commit.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m unittest -v

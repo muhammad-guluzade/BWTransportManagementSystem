@@ -99,6 +99,24 @@ def page_version() -> str:
 
 _version = [float("-inf"), ""]
 
+# Content-Security-Policy on the pages: the browser runs scripts, uses styles,
+# shows pictures and makes requests only from these places, and never runs a
+# script written into the page itself. A second lock: all outside text is
+# already inserted as plain text. The map library comes from unpkg, the map's
+# pictures from Stadia; "data:" pictures are the small icons in style.css.
+CONTENT_SECURITY_POLICY = "; ".join([
+    "default-src 'self'",
+    "script-src 'self' https://unpkg.com",
+    "style-src 'self' https://unpkg.com",
+    "img-src 'self' data: https://tiles.stadiamaps.com https://unpkg.com",
+    "connect-src 'self'",
+    "font-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'self'",
+])
+
 # answers worth compressing: text, and long enough to gain from it
 COMPRESSED_TYPES = {"application/json", "text/html", "text/plain", "text/css", "application/javascript", "text/javascript"}
 COMPRESS_FROM_BYTES = 1024
@@ -112,6 +130,8 @@ def finish(response):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+    if response.mimetype == "text/html":
+        response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
     if request.path.startswith("/api/"):
         response.headers["X-App-Version"] = page_version()
     if (response.direct_passthrough                       # a file sent as it is (the page's files)
