@@ -718,14 +718,24 @@ async function loadStops() {
     openTrip = null;
     openTripError = message;
   } else {
-    const trip = await res.json();
+    // (an answer not in the shape the API promises is shown as a failed load, in the opened row only)
+    let trip = null;
+    try { trip = await res.json(); } catch { trip = null; }
     if (!current()) return;
-    openTrip = trip;
-    openTripUrl = url;
-    openTripError = '';
+    if (tripShape(trip)) {
+      openTrip = trip;
+      openTripUrl = url;
+      openTripError = '';
+    } else if (!openTrip) {
+      openTripError = 'Could not load the stops.';
+    }
   }
   render();
 }
+
+const isStop = stop => Boolean(stop) && typeof stop === 'object' && !Array.isArray(stop);
+const tripShape = trip => isStop(trip) && isStop(trip.here) && Array.isArray(trip.previous) && Array.isArray(trip.onward)
+  && trip.previous.every(isStop) && trip.onward.every(isStop);
 
 // "Show API response": the exact JSON this page was built from, for
 // checking what the API sends without any extra tools
@@ -974,12 +984,18 @@ function renderStops() {
   }
 
   const list = el('table', 'stops-list');
-  if (showEarlier) {
-    trip.previous.forEach(stop => list.appendChild(renderStop(stop, 'earlier')));
-    // this station, as the line between where it came from and where it goes
-    list.appendChild(renderStop(trip.here, 'here'));
+  try {
+    if (showEarlier) {
+      trip.previous.forEach(stop => list.appendChild(renderStop(stop, 'earlier')));
+      // this station, as the line between where it came from and where it goes
+      list.appendChild(renderStop(trip.here, 'here'));
+    }
+    trip.onward.forEach(stop => list.appendChild(renderStop(stop, '')));
+  } catch {
+    // a stop the page cannot show: the rest of the board stays as it is
+    cell.appendChild(el('div', 'stops-note', 'Could not show the stops.'));
+    return row;
   }
-  trip.onward.forEach(stop => list.appendChild(renderStop(stop, '')));
   if (list.rows.length) cell.appendChild(list);
   if (!trip.onward.length) cell.appendChild(el('div', 'stops-note', 'No further stops are known for this departure.'));
   return row;

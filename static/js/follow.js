@@ -58,13 +58,37 @@
       else localStorage.removeItem(KEY);
     } catch { /* no storage: followed while the page is open */ }
   }
+  // What is stored may have been changed by hand or be damaged: only a
+  // connection with everything this page reads from it is followed again.
+  const isObject = x => Boolean(x) && typeof x === 'object' && !Array.isArray(x);
+  const isTime = x => typeof x === 'string' && Number.isFinite(ms(x));
+  const maybeTime = x => x === undefined || x === null || isTime(x);
+  const maybeList = x => x === undefined || x === null || (Array.isArray(x) && x.every(isObject));
+  const place = x => isObject(x) && typeof x.name === 'string';
+  const end = x => place(x) && maybeTime(x.time) && maybeTime(x.planned) && (isTime(x.time) || isTime(x.planned))
+    && (x.platform === undefined || x.platform === null || isObject(x.platform));
+  const usableLeg = leg => isObject(leg) && end(leg.from) && end(leg.to) && maybeList(leg.stops) && maybeList(leg.notices)
+    && (leg.kind === 'walk' ? leg.minutes === undefined || Number.isFinite(leg.minutes)
+      : leg.kind === 'ride' && typeof leg.line === 'string' && (leg.mode === undefined || leg.mode === null || isObject(leg.mode)));
+  const usable = stored => isObject(stored) && stored.v === 1 && place(stored.from) && place(stored.to)
+    && isObject(stored.journey) && (typeof stored.journey.id === 'string' || Number.isFinite(stored.journey.id))
+    && Array.isArray(stored.journey.legs) && stored.journey.legs.length > 0 && stored.journey.legs.every(usableLeg)
+    && isObject(stored.journey.departure) && isObject(stored.journey.arrival)
+    && (isTime(stored.journey.arrival.time) || isTime(stored.journey.arrival.planned)) && maybeList(stored.journey.transfers);
+  // ... and it must draw: one trial of what the page shows of it
+  function draws(stored) {
+    const before = followed;
+    followed = stored;
+    try { summary(view()); return true; } catch { return false; } finally { followed = before; }
+  }
+
   function load() {
     let stored = null;
     try { stored = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { stored = null; }
-    if (!stored || stored.v !== 1 || !stored.journey || !Array.isArray(stored.journey.legs)) return null;
-    // arrived more than 30 minutes ago: done with
-    const arrival = ms(stored.journey.arrival.time || stored.journey.arrival.planned);
-    if (!(arrival + KEEP_AFTER_ARRIVAL_MS > now())) {
+    if (!stored) return null;
+    // damaged, or arrived more than 30 minutes ago: done with
+    const usableNow = usable(stored) && draws(stored);
+    if (!usableNow || !(ms(stored.journey.arrival.time || stored.journey.arrival.planned) + KEEP_AFTER_ARRIVAL_MS > now())) {
       try { localStorage.removeItem(KEY); } catch { /* fine */ }
       return null;
     }

@@ -8,24 +8,25 @@
    device's ("Auto"), unless the menu (menu.js) set data-theme on <html>. */
 
 :root {
-  --bg: #f4f5f7; --card: #fff; --text: #1d2228; --muted: #6b7280; --faint: #8f97a3; --line: #e3e6ea;
-  --accent: #0b5cad; --accent-soft: #e8f0fa; --late: #c1121c; --star: #d99100;
+  --bg: #f4f5f7; --card: #fff; --text: #1d2228; --muted: #575e69; --faint: #666d79; --line: #e3e6ea;
+  --accent: #0b5cad; --accent-soft: #e8f0fa; --late: #c1121c; --star: #b07400;
   --warn-bg: #fffaeb; --warn-line: #ecd9a0; --shade: rgba(16, 24, 40, 0.16); --grip: #d3d8de; --ok: #2e7d4f; --warn: #8a5a00;
   /* transport types: the map's markers, line badges and section headings */
-  --rail: #c1121c; --rail-light: #d63c3c; --flix: #73d700; --sbahn: #2e8b47; --ubahn: #005aa9; --tram: #e07b00; --bus: #a1338f; --other: #5b6470;
+  --rail: #c1121c; --rail-light: #d63c3c; --flix: #73d700; --sbahn: #2a8042; --ubahn: #005aa9; --tram: #e07b00; --bus: #a1338f; --other: #5b6470;
+  --badge-grey: #666d79;
   color-scheme: light;
 }
 /* dark: the device is dark and no theme was chosen, or "Dark" was chosen */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #14181d; --card: #1d232a; --text: #e6e9ee; --muted: #a3abb6; --faint: #7d8693; --line: #2d343d;
+    --bg: #14181d; --card: #1d232a; --text: #e6e9ee; --muted: #a3abb6; --faint: #8d96a2; --badge-grey: #6b7280; --line: #2d343d;
     --accent: #72aaee; --accent-soft: #1c2a3b; --late: #ff6b6b; --star: #f2c14e;
     --warn-bg: #2a2416; --warn-line: #5f4d22; --shade: rgba(0, 0, 0, 0.5); --grip: #4a525d; --ok: #6fcf97; --warn: #f2c14e;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-    --bg: #14181d; --card: #1d232a; --text: #e6e9ee; --muted: #a3abb6; --faint: #7d8693; --line: #2d343d;
+    --bg: #14181d; --card: #1d232a; --text: #e6e9ee; --muted: #a3abb6; --faint: #8d96a2; --badge-grey: #6b7280; --line: #2d343d;
     --accent: #72aaee; --accent-soft: #1c2a3b; --late: #ff6b6b; --star: #f2c14e;
     --warn-bg: #2a2416; --warn-line: #5f4d22; --shade: rgba(0, 0, 0, 0.5); --grip: #4a525d; --ok: #6fcf97; --warn: #f2c14e;
     color-scheme: dark;
@@ -47,7 +48,7 @@ button { font: inherit; color: inherit; }
 /* 16 px at least: iPhones zoom into smaller text fields */
 #stop-input { -webkit-appearance: none; appearance: none; width: 100%; padding: 11px 16px 11px 42px; font: inherit; font-size: 16px;
   border: 1px solid var(--line); border-radius: 24px; color: var(--text); background: var(--card) no-repeat 15px center;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' fill='none' stroke='%238f97a3' stroke-width='2'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Cpath d='M12.5 12.5 17 17'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='18' fill='none' stroke='%23666d79' stroke-width='2'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Cpath d='M12.5 12.5 17 17'/%3E%3C/svg%3E");
   box-shadow: 0 1px 4px var(--shade); outline: none; }
 #stop-input { padding-right: 42px; }
 #stop-input:focus { border-color: var(--accent); }
@@ -218,7 +219,7 @@ button { font: inherit; color: inherit; }
 /* each chip is just the line's badge (the user's design); a picked one is darker: its own
    colour with a 37.5% shade over it (1.5 times the 25% it first had; lighter was tried and rejected) */
 .line-chip { flex-shrink: 0; padding: 3px 0; border: none; background: none; cursor: pointer; }
-.line-badge.line-all { background: var(--faint); }
+.line-badge.line-all { background: var(--badge-grey); }
 .line-chip.on .line-badge { box-shadow: inset 0 0 0 99px rgba(0, 0, 0, 0.375); }
 @media (hover: hover) { .line-chip:not(.on):hover .line-badge { box-shadow: inset 0 0 0 99px rgba(0, 0, 0, 0.15); } }
 .line-chip:focus-visible { outline: none; }
@@ -295,7 +296,7 @@ tr.departure.open td { background: var(--accent-soft); }
 .clock .day { color: var(--muted); }
 .late { color: var(--late); font-weight: 600; }
 tr.cancelled .destination, tr.cancelled .via { text-decoration: line-through; color: var(--faint); }
-tr.cancelled .line-badge { background: var(--faint); }
+tr.cancelled .line-badge { background: var(--badge-grey); }
 .show-more { display: block; width: 100%; padding: 10px; font-size: 0.88rem; border: none; border-top: 1px solid var(--line); background: none;
   color: var(--accent); cursor: pointer; }
 .show-more:hover { background: var(--accent-soft); }
@@ -349,6 +350,8 @@ body.route-mode #search-box { display: none; }
 .route-clear:hover { color: var(--text); background: var(--accent-soft); }
 .route-field.has-text .route-clear { display: block; }
 .route-results { top: calc(100% + 4px); }
+/* a list that is only a message ("Nothing found ...") lies over the field below: taps go through to it */
+.route-results.message-only { pointer-events: none; }
 .results .route-me .result-name { color: var(--accent); font-weight: 600; }
 #route-swap { grid-column: 2; grid-row: 1 / span 2; width: 38px; height: 38px; padding: 0; border: none; border-radius: 50%; background: var(--accent-soft);
   color: var(--accent); font-size: 20px; line-height: 38px; cursor: pointer; }
@@ -435,7 +438,7 @@ body.route-mode #panel-close { display: none !important; }
 .conn-chain .line-badge { min-width: 30px; padding: 2px 6px; font-size: 0.8rem; }
 .conn-chain .sep { color: var(--faint); }
 .conn-chain .walk { color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
-.line-badge.cancelled { background: var(--faint); text-decoration: line-through; }
+.line-badge.cancelled { background: var(--badge-grey); text-decoration: line-through; }
 .conn-meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--muted); font-size: 0.82rem; }
 .conn-warning { color: var(--late); font-weight: 600; }
 .conn-notice { color: var(--warn); font-weight: 600; }
@@ -675,4 +678,29 @@ body.route-mode #panel-close { display: none !important; }
   body.sheet-full .stops-map { display: inline-block; }
   .stops-cell { padding-left: 14px; }
   .station-name { font-size: 1.15rem; }
+}
+
+/* ---------- phones held sideways (low screens): the sheet's head in two columns ----------
+   Its parts one under the other were taller than half such a screen, so no departure was in
+   sight. Left: the stop's name, the nearby stops, the status; right: the tabs, the line chips,
+   the time. The small bar and Route mode's head keep the whole width. */
+@media (max-width: 1023.98px) and (max-height: 500px) and (orientation: landscape) {
+  #panel-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-auto-flow: row dense; column-gap: 18px; align-items: center; }
+  #sheet-grip, #route-head, body.sheet-peek .station-name, body.sheet-peek #peek, body.sheet-peek #status { grid-column: 1 / -1; }
+  .station-name, #peek, .nearby, #status { grid-column: 1; }
+  #panel-head .tabs, #panel-head .line-chips, #when-bar { grid-column: 2; }
+  body.sheet-half #sheet-grip, body.sheet-full #sheet-grip { height: 26px; }
+  #sheet-grip::before { margin-top: 9px; }
+  .station-name { padding-right: 0; }
+  body.sheet-peek .station-name { padding-right: 72px; }
+  /* the "Map" button sits in the grip's strip, beside the bar */
+  body.sheet-full:not(.layout-screens) #sheet-map { top: 0; }
+  body.sheet-full:not(.layout-screens) #route-head { min-height: 0; }
+  /* the nearby stops: one line that scrolls sideways, like the tabs */
+  .nearby { white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .nearby::-webkit-scrollbar { display: none; }
+  body:not(.layout-screens) #panel-head .nearby { touch-action: pan-x; }
+  /* less room between the head's rows and the list's headings */
+  #panel-head .tabs, #panel-head .line-chips, #when-bar { margin-top: 4px; }
+  .mode-section { margin-top: 8px; }
 }

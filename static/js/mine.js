@@ -9,10 +9,14 @@
   const RECENT_KEPT = 8;
 
   const memory = {};   // used when the browser's storage can't be used
+  // (always a list: what is stored may have been changed by hand, or be damaged)
   function read(key) {
     try {
       const text = localStorage.getItem(key);
-      if (text !== null) return JSON.parse(text);
+      if (text !== null) {
+        const stored = JSON.parse(text);
+        if (Array.isArray(stored)) return stored;
+      }
     } catch { /* nothing stored, or storage blocked */ }
     return memory[key] || [];
   }

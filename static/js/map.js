@@ -29,7 +29,7 @@
   const PLATFORM_ZOOM = 17;
   // marker colours per kind of transport, most important first; a stop gets the
   // colour of the first one that serves it (the legend in index.html matches)
-  const MODE_COLOURS = [['rail', '#c1121c'], ['sbahn', '#2e8b47'], ['ubahn', '#005aa9'], ['tram', '#e07b00'], ['bus', '#a1338f']];
+  const MODE_COLOURS = [['rail', '#c1121c'], ['sbahn', '#2a8042'], ['ubahn', '#005aa9'], ['tram', '#e07b00'], ['bus', '#a1338f']];
   const OTHER_COLOUR = '#666';
   // the stop data gives a few different stops the very same position; their
   // markers are drawn this many pixels apart so that each can be clicked
@@ -355,7 +355,7 @@
   // A tap on a stop or on any spot asks whether the journey starts or ends
   // there; the route of the connection opened is drawn in the lines' colours
   // (dashed: on foot), with the start and the destination marked.
-  const ROUTE_COLOURS = { u_bahn_tram: '#005aa9', s_bahn: '#2e8b47', trains: '#d63c3c', regional_train: '#d63c3c', long_distance_train: '#c1121c',
+  const ROUTE_COLOURS = { u_bahn_tram: '#005aa9', s_bahn: '#2a8042', trains: '#d63c3c', regional_train: '#d63c3c', long_distance_train: '#c1121c',
     bus: '#a1338f', long_distance_bus: '#a1338f' };
   const WALK_COLOUR = '#6b7280';
   const routeLayer = L.layerGroup();

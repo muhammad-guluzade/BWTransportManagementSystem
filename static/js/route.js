@@ -161,17 +161,17 @@
     f.box.classList.toggle('has-text', Boolean(place) || f.input.value !== '');
   }
 
-  function closeLists() {
-    ['from', 'to'].forEach(end => {
-      const f = fields[end];
-      f.counter++;
-      f.list.innerHTML = '';
-      f.rows = [];
-      f.shownFor = null;
-      f.marked = -1;
-      f.input.setAttribute('aria-expanded', 'false');
-    });
+  function closeList(end) {
+    const f = fields[end];
+    f.counter++;
+    f.list.innerHTML = '';
+    f.list.classList.remove('message-only');
+    f.rows = [];
+    f.shownFor = null;
+    f.marked = -1;
+    f.input.setAttribute('aria-expanded', 'false');
   }
+  function closeLists() { ['from', 'to'].forEach(closeList); }
 
   function listRow(end, place, text, detail, className = '') {
     const f = fields[end];
@@ -245,6 +245,8 @@
       }
     });
     f.input.setAttribute('aria-expanded', String(f.rows.length > 0));
+    // only a message ("Nothing found ..."): it lies over the next field, so a tap there still reaches it
+    f.list.classList.toggle('message-only', !f.rows.length);
     if (f.waiting && f.waiting === typed) {
       f.waiting = '';
       // Enter came before these results: the best of them (nothing found: nothing happens)
@@ -286,6 +288,8 @@
         f.input.value = '';
       }
       showField(end);
+      // the other field's list would lie over this one
+      closeList(end === 'from' ? 'to' : 'from');
       if (f.input.value.trim() === '') suggest(end);
     });
     f.input.addEventListener('blur', () => {
@@ -771,13 +775,13 @@
     document.body.classList.toggle('route-compact', mode === 'route' && !wide.matches && folded);
     document.body.classList.toggle('route-quiet', mode === 'route' && !wide.matches && quiet);
     summary.innerHTML = '';
-    if (mode === 'route' && followShown && following()) {
+    if (mode === 'route' && followShown && following() && drawFollowed(() => {
       // the followed connection's places (after "Take it" they can differ from the form's); a tap plans another journey
       const v = window.follow.view();
       summary.appendChild(el('span', 'route-summary-places', `${v.from.name} → ${v.to.name}`));
       summary.appendChild(el('span', 'route-summary-time', 'Following · tap to plan another journey'));
-      return;
-    }
+    })) return;
+    summary.innerHTML = '';
     const places = ends.from && ends.to ? `${nameOf(ends.from)} → ${nameOf(ends.to)}`
       : ends.from ? `${nameOf(ends.from)} → ?` : ends.to ? `? → ${nameOf(ends.to)}` : 'Plan a journey';
     summary.appendChild(el('span', 'route-summary-places', places));
@@ -826,7 +830,8 @@
   function renderHead() {
     head.innerHTML = '';
     if (mode !== 'route') return;
-    if (followShown && following()) { renderFollowHead(window.follow.view()); return; }
+    if (followShown && following() && drawFollowed(() => renderFollowHead(window.follow.view()))) return;
+    head.innerHTML = '';
     if (ends.from && ends.to) {
       const title = el('h2', 'route-title');
       title.appendChild(el('span', '', nameOf(ends.from)));
@@ -883,8 +888,9 @@
   function renderBoard() {
     routeBoard.innerHTML = '';
     if (mode !== 'route') return;
-    if (followShown && following()) { renderFollow(window.follow.view()); return; }
-    if (following()) routeBoard.appendChild(followBanner());
+    if (followShown && following() && drawFollowed(() => renderFollow(window.follow.view()))) return;
+    routeBoard.innerHTML = '';
+    if (following()) drawFollowed(() => routeBoard.appendChild(followBanner()));
     if (state === 'idle' && ends.from && ends.to) {
       routeBoard.appendChild(notice(locating() ? 'Finding your location...'
         : 'Press Search (or Enter, or the keyboard\'s search key in To) to see the connections.', 'notice route-hint'));
@@ -1200,15 +1206,14 @@
 
   // ---------- the map (map.js) ----------
   function drawn() {
-    if (mode === 'route' && followShown && following()) {
+    if (mode === 'route' && followShown && following() && drawFollowed(() => {
       // the followed connection, with what is behind faded (its key keeps the map where it is on each check)
       const v = window.follow.view();
       document.dispatchEvent(new CustomEvent('route-drawn', {
         detail: { active: true, journey: v.journey, from: v.from, to: v.to, followed: true,
           done: v.progress.legs.map((l, i) => (l.state === 'done' ? i : -1)).filter(i => i >= 0) },
       }));
-      return;
-    }
+    })) return;
     const journey = mode === 'route' ? journeys.find(j => j.id === openId) || null : null;
     document.dispatchEvent(new CustomEvent('route-drawn', {
       detail: { active: mode === 'route', journey, from: mode === 'route' ? ends.from : null, to: mode === 'route' ? ends.to : null },
@@ -1298,6 +1303,19 @@
     if (v.progress.phase === 'arrived') return '✓ Arrived';
     const changes = v.journey.changesLive.length;
     return changes ? `✓ All good: ${changes === 1 ? 'the change still works' : 'every change still works'}` : '✓ All good';
+  }
+
+  // A followed connection that cannot be drawn (what was stored is damaged):
+  // it is no longer followed, and the page carries on without it.
+  function drawFollowed(draw) {
+    try {
+      draw();
+      return true;
+    } catch (e) {
+      console.warn('The followed connection could not be shown, so it is no longer followed:', e);
+      setTimeout(() => { if (window.follow.active()) window.follow.stop(); }, 0);
+      return false;
+    }
   }
 
   function renderFollowHead(v) {

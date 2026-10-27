@@ -25,6 +25,8 @@
   const searchBar = document.getElementById('top');
   const screensBar = document.getElementById('screens-bar');
   const narrow = window.matchMedia('(max-width: 1023.98px)');
+  // a phone held sideways: so low that half the screen holds no more than the sheet's head
+  const low = window.matchMedia('(max-width: 1023.98px) and (max-height: 500px) and (orientation: landscape)');
 
   // a fast flick (pixels per millisecond) goes on to the next height
   const FLICK = 0.4;
@@ -34,6 +36,8 @@
   const SLOP = 6;
   // the sheet's top at half height, as a share of the screen's height
   const HALF = 0.5;
+  // ... but on a low screen it is high enough for the list's first headings and one departure
+  const FIRST_ROW = 150;
 
   let state = 'peek';
   let y = 0;            // how far the sheet is pushed down from its full height, in px
@@ -60,8 +64,10 @@
   //     starts sideways there is theirs;
   //   'chips' (the line filter): they only scroll sideways (style.css);
   //   'list': it scrolls; pulled down at its very top, the sheet goes down.
+  //   (On a low screen the nearby stops are one line that scrolls sideways:
+  //   they behave like the tabs.)
   const zoneOf = target => (!head.contains(target) ? 'list'
-    : target.closest('.line-chips') ? 'chips' : target.closest('.tabs') ? 'tabs' : 'strip');
+    : target.closest('.line-chips') ? 'chips' : target.closest('.tabs') || (low.matches && target.closest('.nearby')) ? 'tabs' : 'strip');
   // the heights there are in the layout, top to bottom
   const heights = () => (screens() ? ['full', 'peek'] : ['full', 'half', 'peek']);
 
@@ -73,7 +79,8 @@
     const height = window.innerHeight - top - bottom;
     const bottomPad = screens() ? 0 : parseFloat(getComputedStyle(panel).paddingBottom) - 16;   // the phone's home bar, if any
     const peekHeight = Math.min(head.getBoundingClientRect().height + bottomPad + 4, height);
-    const half = Math.max(0, Math.round(window.innerHeight * HALF) - top);
+    let half = Math.max(0, Math.round(window.innerHeight * HALF) - top);
+    if (low.matches && !screens()) half = Math.min(half, Math.max(0, Math.round(height - head.getBoundingClientRect().height - FIRST_ROW)));
     return { top, bottom, height, positions: { full: 0, half: Math.min(half, height - peekHeight), peek: Math.max(0, height - peekHeight) } };
   }
 
@@ -201,10 +208,11 @@
     if (justDragged || screens()) return;
     setState(state === 'peek' ? 'half' : state === 'half' ? 'full' : 'half');
   });
-  toMap.addEventListener('click', () => setState('half'));
+  // (on a low screen the half sheet leaves little of the map: the bar shows it all)
+  toMap.addEventListener('click', () => setState(low.matches ? 'peek' : 'half'));
   // a tap on the small bar (the stop, its next departure) opens the departures
   head.addEventListener('click', (e) => {
-    if (justDragged || !active() || state !== 'peek' || grip.contains(e.target)) return;
+    if (justDragged || !active() || state !== 'peek' || grip.contains(e.target) || toMap.contains(e.target)) return;
     setState(screens() ? 'full' : 'half');
   });
   // the two screens' bar
