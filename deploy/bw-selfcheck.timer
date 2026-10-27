@@ -1,9 +1,9 @@
 [Unit]
-Description=BW Departures: self-check every hour (not in the timetable service's night gaps, 00:40-02:40)
+Description=BW Departures: self-check every 15 minutes, 03:00-23:45 (not in the timetable service's night gaps)
 
 [Timer]
-OnCalendar=*-*-* 03..23:40:00
-RandomizedDelaySec=2min
+OnCalendar=*-*-* 03..23:00/15:00
+RandomizedDelaySec=60s
 Persistent=false
 
 [Install]

@@ -1,25 +1,27 @@
-"""The site checks itself (run on the server every hour by bw-selfcheck.timer)
-and tells the outside watcher how it went.
+"""The site checks itself (on the server every 15 minutes, 03:00-23:45, by
+bw-selfcheck.timer) and tells the outside watcher how it went.
 
-    python selfcheck.py            # check, print the report, tell the watcher
-    python selfcheck.py --quiet    # (the timer) only problems are printed
+    python selfcheck.py                          # everything; print the report, tell the watcher
+    python selfcheck.py --quiet --hourly-deep    # (the timer) only problems printed
 
-What is checked, from the server itself:
+What is checked, from the server itself (every run):
 - the app answers (page and API), the public address answers over https and
   its certificate has more than 14 days left;
 - the stop data: built, not expired, not ending within 2 days without a newer
   release (the December timetable change), refreshed by the weekly import
   within the last 9 days, the last import job did not fail;
-- the timetable service through our own API: departures now and TOMORROW at
-  08:00 at three big stations, and (navigator on) a connection tomorrow. The
-  "tomorrow" check sees the day after a timetable change before it comes. A
-  week ahead is looked at too and reported, as a warning only;
+- departures now at three big stations, through our own API (3 requests to
+  the timetable service);
 - enough free disk.
+And on the run at the top of each hour ("deep", 8 requests more): departures
+TOMORROW at 08:00 (it sees the day after a timetable change before it comes)
+and a week ahead (a warning only), and (navigator on) a connection tomorrow.
 
-The watcher: Healthchecks.io (free). Its check's address goes into .env as
-BW_HEALTHCHECK_URL. Each run calls it ("all well"), or its /fail address with
-this report; if the calls stop coming (the server is down), Healthchecks.io
-notices that too and sends an e-mail. Without BW_HEALTHCHECK_URL the report is
+The watcher: ONE free service, Healthchecks.io (the user's choice). Its check's
+ping address goes into .env as BW_HEALTHCHECK_URL. Each run calls it ("all
+well"), or its /fail address with this report. If the calls stop coming (the
+server or the site is down), Healthchecks.io notices that too, within about
+half an hour, and sends an e-mail. Without BW_HEALTHCHECK_URL the report is
 only printed (systemd keeps it in the journal: journalctl -u bw-selfcheck).
 
 The timetable service has short gaps at night (02:00-02:25 departures, around
@@ -192,7 +194,9 @@ def check_disk(path: Path) -> Result:
 
 
 # ---------- one run ----------
-def run_checks(get: Callable, now: datetime, cfg: dict, run=None, days_left=None, fetch=None) -> list:
+def run_checks(get: Callable, now: datetime, cfg: dict, run=None, days_left=None, fetch=None, deep: bool = True) -> list:
+    """`deep`: also the timetable a day and a week ahead and a connection (8 requests
+    to the timetable service more; the timer asks for them once an hour)."""
     today = german_today(now)
     tomorrow = (today + timedelta(days=1)).isoformat() + "T08:00"
     week = (today + timedelta(days=7)).isoformat() + "T08:00"
@@ -200,14 +204,21 @@ def run_checks(get: Callable, now: datetime, cfg: dict, run=None, days_left=None
     results += check_stop_data(index, today)
     results += check_import_job(run or (lambda cmd: subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout))
     results.append(check_boards(get, None, "now"))
-    results.append(check_boards(get, tomorrow, f"tomorrow ({tomorrow[:10]})"))
-    results.append(check_boards(get, week, f"in a week ({week[:10]})", warning=True))
-    if cfg["navigator"]:
-        results.append(check_journey(get, tomorrow))
+    if deep:
+        results.append(check_boards(get, tomorrow, f"tomorrow ({tomorrow[:10]})"))
+        results.append(check_boards(get, week, f"in a week ({week[:10]})", warning=True))
+        if cfg["navigator"]:
+            results.append(check_journey(get, tomorrow))
     results += check_public(cfg["public"], days_left or certificate_days_left,
                             fetch or (lambda url: requests.get(url, timeout=TIMEOUT)))
     results.append(check_disk(HERE))
     return results
+
+
+def deep_run(now: datetime, hourly: bool) -> bool:
+    """By hand: everything. The timer (every 15 minutes): the deep checks on the run in the
+    first quarter of each hour (German time), the light ones on every run."""
+    return not hourly or localtime.to_local(now).minute < 15
 
 
 def problems(results: list) -> list:
@@ -237,6 +248,8 @@ def tell_watcher(ping: str, ok: bool, text: str, post: Callable) -> str:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--quiet", action="store_true", help="print only when something is wrong")
+    parser.add_argument("--hourly-deep", action="store_true",
+                        help="(the timer, every 15 minutes) the deep checks only on the run in the first quarter of an hour")
     args = parser.parse_args(argv)
     cfg = settings()
     session = requests.Session()
@@ -248,14 +261,16 @@ def main(argv=None) -> int:
             session.post(cfg["ping"] + "/start", timeout=15)
         except requests.RequestException:
             pass
-    results = run_checks(get, datetime.now(timezone.utc), cfg)
+    started = datetime.now(timezone.utc)
+    deep = deep_run(started, args.hourly_deep)
+    results = run_checks(get, started, cfg, deep=deep)
     # the timetable service has short gaps: its checks are tried again before they count
     for _ in range(TRIES - 1):
         again = [i for i, r in enumerate(results) if r.timetable and not r.ok]
         if not again:
             break
         time.sleep(TRY_AGAIN_SECONDS)
-        fresh = run_checks(get, datetime.now(timezone.utc), cfg)
+        fresh = run_checks(get, datetime.now(timezone.utc), cfg, deep=deep)
         by_name = {r.name: r for r in fresh}
         for i in again:
             results[i] = by_name.get(results[i].name, results[i])

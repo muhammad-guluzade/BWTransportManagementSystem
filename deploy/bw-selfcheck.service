@@ -8,7 +8,7 @@ Type=oneshot
 User=bw
 Group=bw
 WorkingDirectory=/srv/bw/app
-ExecStart=/srv/bw/venv/bin/python selfcheck.py --quiet
+ExecStart=/srv/bw/venv/bin/python selfcheck.py --quiet --hourly-deep
 Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 Nice=10
 NoNewPrivileges=yes

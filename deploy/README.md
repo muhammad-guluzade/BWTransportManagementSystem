@@ -15,7 +15,7 @@ visitor ── https ──▶ Caddy (certificate, http → https) ──▶ the
 | `Caddyfile` | `/etc/caddy/Caddyfile` | https for the site's name, everything passed to the app; waits for the app during an update instead of showing an error; no server names in answers; browsers use https only (a year) |
 | `bw-departures.service` | `/etc/systemd/system/` | runs the app (`serve.py`) as user `bw`, starts it at boot, restarts it if it stops; it may write only its stop data |
 | `bw-stops-import.service`, `.timer` | `/etc/systemd/system/` | rebuilds the stop data from NVBW every Wednesday about 04:00 (keeps the old data if the download fails) |
-| `bw-selfcheck.service`, `.timer` | `/etc/systemd/system/` | the site checks itself every hour from 03:40 to 23:40 (`selfcheck.py`, see "Watchers" below) |
+| `bw-selfcheck.service`, `.timer` | `/etc/systemd/system/` | the site checks itself every 15 minutes from 03:00 to 23:45 (`selfcheck.py`, see "Watchers" below) |
 | `bw-update` | `/usr/local/bin/bw-update` | the update command, see below |
 | `52bw-reboot` | `/etc/apt/apt.conf.d/` | the automatic security updates may restart the server at 04:30 when an update needs it |
 | `../.env.example` | `/srv/bw/app/.env` | the app's server settings |
@@ -33,7 +33,7 @@ Log in: `ssh -i ~/.ssh/bw_strato root@<server address>`
 | `systemctl start bw-stops-import` | new stop data now (otherwise Wednesday night) |
 | `tail /srv/bw/update.log` | every update and rollback |
 | `sudo -u bw /srv/bw/venv/bin/python /srv/bw/app/selfcheck.py` | the self-check now, with its full report |
-| `journalctl -u bw-selfcheck -n 30` | what the hourly self-checks found |
+| `journalctl -u bw-selfcheck -n 30` | what the self-checks found |
 
 **The navigator (Route mode) on or off.** It is on unless the app's settings say
 otherwise. To switch it off (the site is then the departures app alone; its
@@ -103,24 +103,23 @@ goes on to `https://`; `/api/v1/` answers.
 
 ## Watchers: who notices when something is wrong
 
-A server cannot report that it is down, so two free outside services watch it
-and send an e-mail:
+A server cannot report that it is down, so one free outside service watches
+it: **Healthchecks.io**, as a "heartbeat" (push). `selfcheck.py` runs on the
+server every 15 minutes from 03:00 to 23:45 (bw-selfcheck.timer) and calls the
+check's secret ping address (`BW_HEALTHCHECK_URL` in `.env`): "all well", or
+`/fail` with its report. Healthchecks.io sends an e-mail when a call says
+/fail, and also when the calls stop coming (server off, app crashed, Caddy or
+the certificate broken): within about half an hour.
 
-- **UptimeRobot** (pull): every 5 minutes it opens the site and an API
-  address from outside and checks that the expected words come back. It
-  notices: server off, app crashed, Caddy or the certificate broken, the
-  DuckDNS name gone.
-- **Healthchecks.io** (push, a "heartbeat"): `selfcheck.py` runs on the server
-  every hour (bw-selfcheck.timer) and calls the check's secret ping address
-  (`BW_HEALTHCHECK_URL` in `.env`): "all well", or `/fail` with its report.
-  When a call says /fail, or the calls stop coming, Healthchecks.io sends an
-  e-mail. The self-check looks deeper than a visitor can: the stop data and
-  its weekly import, departures now, tomorrow and in a week at three big
-  stations (the December timetable change shows up a day ahead), a
-  connection tomorrow, the certificate's days left, free disk.
+The self-check looks deeper than a visitor can: every run the site, the
+public address and its certificate, the stop data and its weekly import,
+departures now at three big stations, free disk; on the run at the top of
+each hour also departures tomorrow and in a week (the December timetable
+change shows up a day ahead) and a connection tomorrow. About 20 requests an
+hour to the timetable service.
 
-The schedule of the Healthchecks.io check: cron `40 3-23 * * *`, time zone
-Europe/Berlin, grace time 30 minutes.
+The schedule of the Healthchecks.io check: cron `*/15 3-23 * * *`, time zone
+Europe/Berlin, grace time 20 minutes.
 
 ## Tests
 

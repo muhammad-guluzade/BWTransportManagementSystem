@@ -155,6 +155,19 @@ class SelfCheckTest(unittest.TestCase):
             raise requests.ConnectionError("no")
         self.assertIn("could not", selfcheck.tell_watcher("https://hc-ping.com/abc", True, "", down))
 
+    def test_light_runs_and_the_hourly_deep_run(self):
+        # the timer runs every 15 minutes: the deep checks only in the first quarter of an hour (German time)
+        self.assertTrue(selfcheck.deep_run(datetime(2026, 12, 10, 9, 1, tzinfo=timezone.utc), hourly=True))    # 10:01
+        self.assertFalse(selfcheck.deep_run(datetime(2026, 12, 10, 9, 16, tzinfo=timezone.utc), hourly=True))  # 10:16
+        self.assertFalse(selfcheck.deep_run(datetime(2026, 12, 10, 9, 45, tzinfo=timezone.utc), hourly=True))
+        self.assertTrue(selfcheck.deep_run(datetime(2026, 12, 10, 9, 45, tzinfo=timezone.utc), hourly=False))  # by hand: all
+        get = site()
+        light = named(selfcheck.run_checks(get, NOW, CFG, run=lambda cmd: "success", days_left=lambda h: 60.0,
+                                           fetch=lambda url: Answer(200, text="BW Departures"), deep=False))
+        self.assertIn("departures now", light)
+        self.assertFalse({"connection tomorrow", "departures tomorrow (2026-12-11)"} & set(light))
+        self.assertFalse(any("when=" in p or "journeys" in p for p in get.asked))   # 3 boards, nothing ahead
+
     def test_disk(self):
         self.assertTrue(selfcheck.check_disk(Path(selfcheck.HERE)).name == "disk")
 
