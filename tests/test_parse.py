@@ -170,6 +170,27 @@ class PlatformLabelTest(unittest.TestCase):
     def test_falls_back_to_platform_number(self):
         self.assertEqual(parse.platform_label(platform(number="2")), "Platform 2")
 
+    def test_a_number_written_twice_gives_way_to_the_planned_platform(self):
+        # live data of the RE1 (October 2026): the VVS timetable server had the planned platform each time
+        def props(name, planned=None, number=None):
+            return {"properties": {k: v for k, v in (("platformName", name), ("plannedPlatformName", planned), ("platform", number)) if v is not None}}
+        self.assertEqual(parse.platform_code(props("1010", "6", "6")), "6")
+        self.assertEqual(parse.platform_code(props("1212", "14", "14")), "14")
+        self.assertEqual(parse.platform_code(props("1515", "15", "15")), "15")
+        self.assertEqual(parse.platform_code(props("22", "7", "7")), "7")
+        self.assertEqual(parse.platform_code(props("Gleis 33", "Gleis 4", "4")), "4")
+        # nothing planned: no name on the signs, the timetable service's own number
+        self.assertEqual(parse.platform_code(props("22", None, "11")), "11")
+        self.assertEqual(parse.signposted_platform(props("22", None, "11")["properties"]), "")
+        # left alone: track 11, a real change, a name that is the planned one, other numbers
+        self.assertEqual(parse.platform_code(props("11", "1", "1")), "11")
+        self.assertEqual(parse.platform_code(props("1111", "1111", "1111")), "1111")
+        self.assertEqual(parse.platform_code(props("5", "8", "8")), "5")
+        self.assertEqual(parse.platform_code(props("101", "102", "102")), "101")
+        self.assertEqual(parse.platform_code(props("1210", "12", "12")), "1210")
+        self.assertEqual(parse.platform_code(props("4 Nord", "4", "4")), "4 Nord")
+        self.assertEqual(parse.platform_code(props("A", "B", "B")), "A")
+
     def test_missing_or_junk_is_unknown(self):
         self.assertEqual(parse.platform_label(platform()), "Unknown platform")
         self.assertEqual(parse.platform_label(platform("Flix")), "Unknown platform")
@@ -808,6 +829,11 @@ class PlatformPlaceTest(unittest.TestCase):
         # moved to another platform today
         dep = parse.parse_departure(event({"platform": "4", "platformName": "5", "plannedPlatformName": "4"}))
         self.assertEqual((dep["platform"], dep["platform_named"], dep["platform_moved"]), ("Platform 5", True, True))
+        # a number written twice (the RE1's live data): the planned platform, not moved
+        dep = parse.parse_departure(event({"platform": "6", "platformName": "1010", "plannedPlatformName": "6"}))
+        self.assertEqual((dep["platform"], dep["platform_code"], dep["platform_named"], dep["platform_moved"]), ("Platform 6", "6", True, False))
+        dep = parse.parse_departure(event({"platform": "11", "platformName": "22"}))
+        self.assertEqual((dep["platform"], dep["platform_named"], dep["platform_moved"]), ("Platform 11", False, False))
         # the end of the line, and a list that starts with this station again
         self.assertIsNone(parse.parse_departure(event({"platform": "2"}, onward_stops=()))["next_stop"])
         self.assertEqual(parse.next_stop(event({}, onward_stops=("Pragfriedhof", "Heidelberg, Post Waypoint", "Killesberg"))), "Killesberg")

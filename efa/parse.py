@@ -314,11 +314,35 @@ def brand(transportation: dict) -> str | None:
 
 # --- departures: places ----------------------------------------------------
 
+def written_twice(code: str) -> bool:
+    """'1010', '1212', '22', '33': a number written twice. ('11' is not
+    counted: track 11 is real at many stations.)"""
+    half = len(code) // 2
+    return code.isdigit() and len(code) in (2, 4) and code != "11" and code[:half] == code[half:]
+
+
+def signposted_platform(props: dict) -> str:
+    """The platform's name on the signs, as EFA sends it live (`platformName`),
+    or '' when it sends none.
+
+    One train's live data (the RE1 Karlsruhe - Stuttgart - Aalen, October
+    2026) writes some platforms as a number twice: "1010", "1212", "22",
+    "33" (Stuttgart Hbf has no track 22). Those are not the platform: the
+    VVS timetable server has the planned platform for every one of them. Such
+    a name gives way to the planned platform (none planned: no name)."""
+    name = (props.get("platformName") or "").strip()
+    planned = (props.get("plannedPlatformName") or "").strip()
+    bare = PLATFORM_PREFIX.sub("", name).strip()
+    if written_twice(bare) and PLATFORM_PREFIX.sub("", planned).strip() != bare:
+        return planned
+    return name
+
+
 def platform_code(location: dict) -> str | None:
     """The bare platform, without the regional prefix: 'Gleis 3', 'Bstg. A',
     'Pos. 2', '101' -> '3', 'A', '2', '101'. None if EFA gives no platform."""
     props = location.get("properties") or {}
-    raw = (props.get("platformName") or props.get("platform") or "").strip()
+    raw = (signposted_platform(props) or str(props.get("platform") or "")).strip()
     code = PLATFORM_PREFIX.sub("", raw).strip()
     if not code or PLATFORM_JUNK.match(code):
         return None
@@ -637,7 +661,7 @@ def parse_departure(event: dict, now: datetime | None = None, importance: dict |
     actual = estimated or planned
     destination = short_name((transportation.get("destination") or {}).get("name") or "?", city)
     properties = location.get("properties") or {}
-    signposted = (properties.get("platformName") or "").strip()
+    signposted = signposted_platform(properties)
     platform_lat, platform_lon = lat_lon(location.get("coord"))
 
     return {
