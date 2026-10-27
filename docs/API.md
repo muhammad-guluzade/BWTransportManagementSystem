@@ -639,6 +639,35 @@ Errors: `400 invalid_parameter` for a missing or unusable `from` / `to` (not
 a stop id of Baden-Württemberg, a stop that doesn't exist, a point outside
 the state) or a malformed `when`.
 
+### `GET /api/v1/journeys/live?ride={board_stop}/{departure_id}&ride=...`
+
+Following a connection: the live state of its rides, all in one answer. Give
+each ride of the connection as `ride={board_stop}/{departure_id}` (as the
+journeys answer names them; at most 8; rides with `board_stop` null start
+outside Baden-Württemberg and have no live data here). Every answer is fresh
+from the timetable service (at most 30 seconds old), never from memory.
+
+```json
+{
+  "rides": [
+    {"stop": "de:08111:115", "id": "MjAyNi0...", "ok": true,
+     "trip": {"id": "MjAyNi0...", "line": "U7", "destination": "Nellingen Ostfildern", "here": {"...": "as a departure's stops"},
+              "previous": [], "onward": [{"id": "de:08111:6112", "name": "Hauptbf (A.-Klett-Platz)", "time": "2026-10-27T08:58:00Z", "...": "..."}]}},
+    {"stop": "de:08111:6118", "id": "MjAyNi1...", "ok": false,
+     "error": {"code": "unknown_departure", "message": "This departure is no longer known."}}
+  ],
+  "checked": "2026-10-27T08:56:12Z"
+}
+```
+
+| Field | |
+|---|---|
+| `rides` | One per `ride` asked, in the same order. `ok: true` with `trip`, shaped like the answer of `GET /api/v1/stops/{stop}/departures/{id}/stops` (`here`: the departure from `stop`, live `time`, `cancelled`; `onward`: the stops ahead with their live arrival times, find the stop where the connection gets off by its `id`), or `ok: false` with `error` (`unknown_departure`: no longer in the timetable service's answer; `timetable_unavailable`). One ride's error spoils nothing else. |
+| `checked` | When this was asked (UTC). |
+
+Errors: `400 invalid_parameter` without `ride`, with a `ride` not shaped `{board_stop}/{departure_id}`, or with more than 8.
+Counts as a request to the timetable service (see "Limits"). With the navigator switched off, as `journeys`, this answers 404.
+
 ## Errors
 
 Errors use the matching HTTP status and always have this shape:

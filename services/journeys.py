@@ -79,6 +79,29 @@ def in_baden_wuerttemberg(lat: float, lon: float) -> bool:
         return south <= lat <= north and west <= lon <= east
 
 
+# ---------- following a connection: the live state of its rides ----------
+LIVE_RIDES_MAX = 8
+
+
+def live_rides(rides: list) -> list:
+    """[(board_stop, departure_id), ...] -> one answer per ride, in order:
+    {stop, id, ok: True, trip} with the ride's live times (its stops ahead
+    with their live arrivals, cancelled or not), or {stop, id, ok: False,
+    error: {code, message}}. Asked side by side; one ride's trouble does not
+    spoil the others'."""
+    def one(ride):
+        stop, departure = ride
+        try:
+            return {"stop": stop, "id": departure, "ok": True, "trip": departures.trip(stop, departure, fresh=True)}
+        except departures.UnknownDeparture:
+            return {"stop": stop, "id": departure, "ok": False,
+                    "error": {"code": "unknown_departure", "message": "This departure is no longer known."}}
+        except client.EfaError:
+            return {"stop": stop, "id": departure, "ok": False,
+                    "error": {"code": "timetable_unavailable", "message": "The timetable service is not responding."}}
+    return list(_pool.map(one, rides))
+
+
 def town_in_bw(data: dict, end: str) -> bool | None:
     """Is the town the planner found at a journey's "origin" / "destination"
     in Baden-Württemberg (by its municipality key)? None: no answer says."""

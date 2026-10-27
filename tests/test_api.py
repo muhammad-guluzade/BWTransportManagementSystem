@@ -352,7 +352,7 @@ class IndexTest(ApiTestCase):
     def test_index_lists_the_endpoints(self):
         body = self.http.get("/api/v1/").get_json()
         self.assertEqual(body["version"], 1)
-        self.assertEqual(set(body["endpoints"]), {"search_stops", "stops_in_area", "departures", "platform_departures", "departure_stops", "journeys"})
+        self.assertEqual(set(body["endpoints"]), {"search_stops", "stops_in_area", "departures", "platform_departures", "departure_stops", "journeys", "journeys_live"})
 
 
 class SearchTest(ApiTestCase):
@@ -1184,6 +1184,75 @@ class NavigatorSwitchTest(unittest.TestCase):
                 os.environ.pop("BW_NAVIGATOR", None)
             else:
                 os.environ["BW_NAVIGATOR"] = was
+
+
+class JourneysLiveTest(unittest.TestCase):
+    """Following a connection: the live state of its rides in one answer
+    (GET /api/v1/journeys/live), never from the server's memory of trips."""
+
+    def setUp(self):
+        self.http = app.test_client()
+        self.real = departures.trip
+        self.asked = []
+
+        def fake(stop, departure, fresh=False):
+            self.asked.append((stop, departure, fresh))
+            if departure == "gone":
+                raise departures.UnknownDeparture(departure)
+            if departure == "down":
+                raise client.EfaError("down")
+            return {"id": departure, "line": "U7", "here": {"id": stop, "time": "2026-10-27T09:54:00Z", "cancelled": False}, "onward": [], "previous": []}
+        departures.trip = fake
+
+    def tearDown(self):
+        departures.trip = self.real
+
+    def test_rides_in_order_each_fresh(self):
+        res = self.http.get("/api/v1/journeys/live?ride=de:08111:115/AAA&ride=de:08111:6118/BBB")
+        self.assertEqual(res.status_code, 200)
+        body = res.get_json()
+        self.assertEqual([(r["stop"], r["id"], r["ok"]) for r in body["rides"]], [("de:08111:115", "AAA", True), ("de:08111:6118", "BBB", True)])
+        self.assertEqual(body["rides"][0]["trip"]["line"], "U7")
+        self.assertRegex(body["checked"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertTrue(all(fresh for _, _, fresh in self.asked))       # never the remembered trip
+
+    def test_one_ride_failing_spoils_nothing(self):
+        body = self.http.get("/api/v1/journeys/live?ride=a/gone&ride=b/down&ride=c/fine").get_json()
+        self.assertEqual([r["ok"] for r in body["rides"]], [False, False, True])
+        self.assertEqual([r.get("error", {}).get("code") for r in body["rides"]], ["unknown_departure", "timetable_unavailable", None])
+
+    def test_bad_requests(self):
+        for url in ("/api/v1/journeys/live", "/api/v1/journeys/live?ride=nostop", "/api/v1/journeys/live?ride=/x",
+                    "/api/v1/journeys/live?" + "&".join(f"ride=s/{n}" for n in range(9))):
+            res = self.http.get(url)
+            self.assertEqual(res.status_code, 400, url)
+            self.assertEqual(res.get_json()["error"]["code"], "invalid_parameter")
+
+    def test_navigator_off(self):
+        was = app.config["NAVIGATOR"]
+        app.config["NAVIGATOR"] = False
+        try:
+            self.assertEqual(self.http.get("/api/v1/journeys/live?ride=a/b").status_code, 404)
+            self.assertNotIn("journeys_live", self.http.get("/api/v1/").get_json()["endpoints"])
+        finally:
+            app.config["NAVIGATOR"] = was
+
+    def test_counts_as_a_timetable_request(self):
+        self.assertEqual(limits.KIND_OF_ENDPOINT["api_v1.journeys_live"], "timetable")
+        self.assertEqual(limits.KIND_OF_ENDPOINT["api_v1.plan_journeys"], "timetable")
+
+    def test_fresh_trip_skips_memory(self):
+        departures.trip = self.real
+        remembered = {"id": "X", "here": {"id": "de:08111:115"}, "onward": []}
+        departures.remember_trip(remembered)
+        self.assertIs(departures.trip("de:08111:115", "X"), remembered)
+        real_get = client.get_departures
+        client.get_departures = lambda *a, **kw: {"stopEvents": []}
+        try:
+            with self.assertRaises(departures.UnknownDeparture):
+                departures.trip("de:08111:115", "X", fresh=True)    # (asked anew; "X" is no real id)
+        finally:
+            client.get_departures = real_get
 
 
 class PageTest(unittest.TestCase):

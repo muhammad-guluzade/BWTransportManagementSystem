@@ -32,7 +32,6 @@ KIND_OF_ENDPOINT = {
     "api_v1.stop_departures": "timetable",
     "api_v1.departure_stops": "timetable",
     "api_v1.search_stops": "timetable",
-    "api_v1.plan_journeys": "timetable",
     "api_v1.stops_in_area": "local",
     "api_v1.index": "local",
 }

@@ -151,15 +151,17 @@ def remember_trip(trip: dict) -> None:
             del _trips[next(iter(_trips))]
 
 
-def trip(stop_id: str, departure_id: str) -> dict:
+def trip(stop_id: str, departure_id: str, fresh: bool = False) -> dict:
     """The stops of one departure of a station's board:
     {id, line, destination, here, previous: [...], onward: [...]}.
 
     Normally answered from memory. If the departure isn't remembered (the
     board was loaded long ago, or the server restarted), EFA is asked once
-    for the departures around its planned time."""
+    for the departures around its planned time. `fresh` (the navigator's
+    live checks): never from memory, so the live times are at most as old
+    as the client's cache (30 s)."""
     with _trips_lock:
-        remembered = _trips.get(departure_id)
+        remembered = None if fresh else _trips.get(departure_id)
     # a departure belongs to one station: under another station's address it is unknown
     if remembered and remembered[0] > time.monotonic() and remembered[1]["here"]["id"] == stop_id:
         return remembered[1]
