@@ -68,7 +68,7 @@ apt-get install -y python3-venv git curl
 **2. The app, as its own user**
 ```bash
 useradd --system --create-home --home-dir /srv/bw --shell /usr/sbin/nologin bw
-cd /srv/bw && sudo -u bw git clone https://github.com/muhammad-guluzade/BWTransportManagementSystem.git app
+cd /srv/bw && sudo -u bw git clone https://github.com/muhammad-guluzade/BWDepartures.git app
 sudo -u bw python3 -m venv /srv/bw/venv
 sudo -u bw /srv/bw/venv/bin/pip install -r /srv/bw/app/requirements.txt
 cd /srv/bw/app && sudo -u bw cp .env.example .env && chmod 600 .env
